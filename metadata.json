@@ -1,0 +1,5 @@
+{
+  "name": "CodePanorama",
+  "description": "A Github project source code panorama generator using AI to analyze and visualize core function call chains.",
+  "requestFramePermissions": []
+}
