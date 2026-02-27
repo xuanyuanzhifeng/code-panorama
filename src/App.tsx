@@ -2,6 +2,7 @@
 
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { RepoInput } from './components/RepoInput';
+import { LocalPathInput } from './components/LocalPathInput';
 import { AgentLog } from './components/AgentLog';
 import { GraphViewer, GraphViewerRef } from './components/GraphViewer';
 import { useGithubAgent } from './hooks/useGithubAgent';
@@ -383,6 +384,7 @@ function App() {
     moduleClassificationFailed,
     isReanalyzingModules,
     reanalyzeModules,
+    stopAnalysis,
     loadFileContent,
     clearFileCache,
     updateNodeDescription,
@@ -396,6 +398,7 @@ function App() {
   const sourceDecorationIdsRef = useRef<string[]>([]);
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
   const [isRepoUrlExpanded, setIsRepoUrlExpanded] = useState(false);
+  const [homeSourceType, setHomeSourceType] = useState<'github' | 'local'>('github');
   const [view, setView] = useState<'home' | 'result'>('home');
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'dark';
@@ -422,6 +425,7 @@ function App() {
   const [isAgentFullscreenOpen, setIsAgentFullscreenOpen] = useState(false);
   const [isProjectFilesFullscreenOpen, setIsProjectFilesFullscreenOpen] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+  const [lastExportFingerprint, setLastExportFingerprint] = useState<string | null>(null);
   const [importedLogs, setImportedLogs] = useState<LogEntry[] | null>(null);
   const [importedAiUsageStats, setImportedAiUsage] = useState<AiUsageStats | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
@@ -438,6 +442,7 @@ function App() {
   }), [importedAiUsageStats, aiUsageStats]);
   const shouldShowReanalyzeModulesButton = moduleClassificationFailed
     || (((graphData?.nodes?.length || 0) > 0) && ((graphData?.modules?.length || 0) === 0));
+  const isDisplayRepoUrlHttp = /^https?:\/\//i.test(displayRepoUrl);
 
   const panelButtons = [
     { key: 'files' as PanelKey, label: '文件', icon: ListTree },
@@ -459,6 +464,52 @@ function App() {
     });
     return result;
   }, [panelWidths, visiblePanelKeys]);
+
+  const homeSourceTabs = (
+    <div className={clsx(
+      'relative z-10 -mx-8 -mt-8 mb-6 border-b px-8 pt-4',
+      theme === 'dark' ? 'border-slate-800 bg-slate-950/35' : 'border-gray-200 bg-gray-50/85'
+    )}>
+      <div className="flex items-end gap-6">
+        <button
+          type="button"
+          onClick={() => setHomeSourceType('github')}
+          className={clsx(
+            'relative inline-flex items-center gap-2 pb-3 text-sm font-semibold transition-colors',
+            homeSourceType === 'github'
+              ? (theme === 'dark' ? 'text-blue-300' : 'text-blue-700')
+              : (theme === 'dark' ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-700')
+          )}
+        >
+          <Github size={15} />
+          GitHub 仓库
+          <span className={clsx(
+            'pointer-events-none absolute -bottom-px left-0 h-0.5 w-full rounded-full transition-opacity',
+            theme === 'dark' ? 'bg-blue-400' : 'bg-blue-600',
+            homeSourceType === 'github' ? 'opacity-100' : 'opacity-0'
+          )} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setHomeSourceType('local')}
+          className={clsx(
+            'relative inline-flex items-center gap-2 pb-3 text-sm font-semibold transition-colors',
+            homeSourceType === 'local'
+              ? (theme === 'dark' ? 'text-blue-300' : 'text-blue-700')
+              : (theme === 'dark' ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-700')
+          )}
+        >
+          <FolderOpen size={15} />
+          本地目录
+          <span className={clsx(
+            'pointer-events-none absolute -bottom-px left-0 h-0.5 w-full rounded-full transition-opacity',
+            theme === 'dark' ? 'bg-blue-400' : 'bg-blue-600',
+            homeSourceType === 'local' ? 'opacity-100' : 'opacity-0'
+          )} />
+        </button>
+      </div>
+    </div>
+  );
 
   useEffect(() => {
     if (status === 'complete' && graphData) {
@@ -491,7 +542,7 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [view, isPanelVisible.source]);
 
-  const handleAnalyze = (url: string) => {
+  const handleAnalyze = (url: string, sourceType: 'github' | 'local' = 'github') => {
     clearFileCache();
     setImportedLogs(null);
     setImportedAiUsage(null);
@@ -502,20 +553,26 @@ function App() {
     setTargetLine(undefined);
     setSourceCode('');
     setSourceError('');
-    analyzeRepo(url);
+    setLastExportFingerprint(null);
+    analyzeRepo(url, undefined, sourceType);
   };
+
+  const getCurrentExportFingerprint = useCallback(() => {
+    if (!projectPanoramaMarkdown) return '';
+    return buildExportMarkdownWithAgentLogs(
+      projectPanoramaMarkdown,
+      panelLogs,
+      graphData,
+      mergedAiUsageStats
+    );
+  }, [projectPanoramaMarkdown, panelLogs, graphData, mergedAiUsageStats]);
 
   const handleExportPanoramaMd = () => {
     if (!projectPanoramaMarkdown) return;
     const repoNameSource = graphData?.repoName || displayRepoUrl || 'project';
     const repoShortName = repoNameSource.split('/').filter(Boolean).pop() || 'project';
     const safeRepoName = repoShortName.replace(/[^a-zA-Z0-9._-]+/g, '_');
-    const markdownWithAgentLogs = buildExportMarkdownWithAgentLogs(
-      projectPanoramaMarkdown,
-      panelLogs,
-      graphData,
-      mergedAiUsageStats
-    );
+    const markdownWithAgentLogs = getCurrentExportFingerprint();
     const blob = new Blob([markdownWithAgentLogs], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -525,6 +582,7 @@ function App() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    setLastExportFingerprint(markdownWithAgentLogs);
   };
 
   const handleExportImage = async () => {
@@ -611,6 +669,7 @@ function App() {
           setImportedLogs(parsedLogs);
           setImportedAiUsage(parsedAiUsage);
           setImportedAiUsageStats({ inputTokens: 0, outputTokens: 0, callCount: 0 });
+          setLastExportFingerprint(null);
           hydrateImportedContext(
             importedData,
             importedData.panoramaMarkdown || (typeof content === 'string' && content.includes('PROJECT_PANORAMA') ? content : '')
@@ -637,6 +696,26 @@ function App() {
   const triggerImport = () => {
     fileInputRef.current?.click();
   };
+
+  const handleBackToHome = useCallback(() => {
+    const hasAnalysisData = Boolean(projectPanoramaMarkdown || graphData?.nodes?.length || graphData?.edges?.length);
+    if (!hasAnalysisData) {
+      setView('home');
+      return;
+    }
+
+    const currentFingerprint = getCurrentExportFingerprint();
+    const needWarn = Boolean(currentFingerprint) && (
+      !lastExportFingerprint || lastExportFingerprint !== currentFingerprint
+    );
+
+    if (needWarn) {
+      const ok = window.confirm('你还没有导出最新工程文件，返回首页可能导致本次修改丢失。是否继续返回？');
+      if (!ok) return;
+    }
+
+    setView('home');
+  }, [projectPanoramaMarkdown, graphData, getCurrentExportFingerprint, lastExportFingerprint]);
 
   const allFiles = useMemo(() => graphData?.allFiles || [], [graphData?.allFiles]);
   const fileTree = useMemo(() => buildFileTree(allFiles), [allFiles]);
@@ -853,7 +932,11 @@ function App() {
           </div>
 
           <div className="w-full relative">
-            <RepoInput onAnalyze={handleAnalyze} isLoading={isAnalyzing} theme={theme} />
+            {homeSourceType === 'github' ? (
+              <RepoInput onAnalyze={(url) => handleAnalyze(url, 'github')} isLoading={isAnalyzing} theme={theme} topContent={homeSourceTabs} />
+            ) : (
+              <LocalPathInput onAnalyze={(path) => handleAnalyze(path, 'local')} isLoading={isAnalyzing} theme={theme} topContent={homeSourceTabs} />
+            )}
 
             <div className="mt-6 flex justify-center">
           <button
@@ -897,7 +980,7 @@ function App() {
       )}>
         <div className="flex items-center gap-4">
           <button
-            onClick={() => setView('home')}
+            onClick={handleBackToHome}
             className={clsx(
                 'p-2 rounded-full transition-colors',
                 theme === 'dark'
@@ -948,7 +1031,7 @@ function App() {
              <div className="p-6 space-y-8">
                <div>
                  <h2 className={clsx('text-xs font-bold uppercase tracking-widest mb-4', theme === 'dark' ? 'text-slate-500' : 'text-slate-400')}>
-                   Agent 状态面板
+                   Agent 工作日志
                  </h2>
                  <div className={clsx(
                    'rounded-xl border overflow-hidden',
@@ -960,7 +1043,7 @@ function App() {
                    )}>
                      <div className="inline-flex items-center gap-2">
                        <Terminal size={13} className="text-blue-500" />
-                       <span>Agent 状态</span>
+                       <span>Agent 工作日志</span>
                      </div>
                      <button
                        type="button"
@@ -1070,6 +1153,39 @@ function App() {
                    <div className="flex items-center justify-between mt-2">
                      <span>连线数</span>
                      <span className="text-xs font-mono">{graphData?.edges?.length || 0}</span>
+                   </div>
+                   <div className="mt-3 flex items-center gap-2">
+                     <button
+                       type="button"
+                       onClick={stopAnalysis}
+                       disabled={!isAnalyzing}
+                       className={clsx(
+                         'flex-1 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                         theme === 'dark'
+                           ? 'border-rose-700/70 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20'
+                           : 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                       )}
+                     >
+                       停止分析
+                     </button>
+                     <button
+                       type="button"
+                       onClick={() => {
+                         const target = displayRepoUrl || repoUrl;
+                         if (!target) return;
+                         const sourceType = /^https?:\/\//i.test(target) ? 'github' as const : 'local' as const;
+                         handleAnalyze(target, sourceType);
+                       }}
+                       disabled={isAnalyzing || !(displayRepoUrl || repoUrl)}
+                       className={clsx(
+                         'flex-1 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                         theme === 'dark'
+                           ? 'border-blue-700/70 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20'
+                           : 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                       )}
+                     >
+                       重新分析
+                     </button>
                    </div>
                  </div>
                </div>
@@ -1216,7 +1332,7 @@ function App() {
                      <FolderTree size={16} />
                      分析工作台
                  </div>
-                 {displayRepoUrl ? (
+                 {displayRepoUrl && isDisplayRepoUrlHttp ? (
                    <a
                      href={displayRepoUrl}
                      target="_blank"
@@ -1444,7 +1560,7 @@ function App() {
               <div className="flex items-center gap-2">
                 <Terminal size={16} className="text-blue-500" />
                 <span className={clsx('text-sm font-medium', theme === 'dark' ? 'text-slate-200' : 'text-slate-800')}>
-                  Agent 状态面板（全屏）
+                  Agent 工作日志（全屏）
                 </span>
               </div>
               <button

@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
-import { Search, Github, Loader2, Sparkles } from 'lucide-react';
+import { Search, Loader2, Sparkles } from 'lucide-react';
 import { clsx } from 'clsx';
 
 interface RepoInputProps {
   onAnalyze: (url: string) => void;
   isLoading: boolean;
   theme: 'light' | 'dark';
+  topContent?: React.ReactNode;
 }
 
-export function RepoInput({ onAnalyze, isLoading, theme }: RepoInputProps) {
+export function RepoInput({ onAnalyze, isLoading, theme, topContent }: RepoInputProps) {
   const [url, setUrl] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -34,15 +35,9 @@ export function RepoInput({ onAnalyze, isLoading, theme }: RepoInputProps) {
           ? "bg-blue-500/10 group-hover:bg-blue-500/20" 
           : "bg-blue-400/20 group-hover:bg-blue-400/30"
       )}></div>
+
+      {topContent}
       
-      <h2 className={clsx(
-        "text-2xl font-bold mb-3 flex items-center gap-3 relative z-10 transition-colors",
-        isDark ? "text-white" : "text-slate-800"
-      )}>
-        <Github className={clsx("w-7 h-7", isDark ? "text-slate-200" : "text-slate-700")} />
-        <span>开始分析</span>
-        <Sparkles className="w-4 h-4 text-cyan-400 animate-pulse" />
-      </h2>
       <p className={clsx(
         "mb-8 text-sm relative z-10 transition-colors",
         isDark ? "text-slate-400" : "text-slate-500"

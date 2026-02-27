@@ -18,11 +18,11 @@ function writeLine(level: "INFO" | "ERROR", event: string, payload: Record<strin
 
   const line = JSON.stringify(record);
 
-  if (level === "ERROR") {
-    console.error("[AI_CALL]", line);
-  } else {
-    console.log("[AI_CALL]", line);
-  }
+  // if (level === "ERROR") {
+  //   console.error("[AI_CALL]", line);
+  // } else {
+  //   console.log("[AI_CALL]", line);
+  // }
 
   ensureLogDir();
   appendFileSync(logFilePath, `${line}\n`, "utf8");

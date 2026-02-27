@@ -3,6 +3,7 @@ import axios from 'axios';
 import { GraphData, LogEntry, AgentStatus, GraphNode, GraphEdge, GraphModule, AiUsageStats } from '../types';
 
 type DrillFlag = -1 | 0 | 1;
+type SourceType = 'github' | 'local';
 
 type LlmCallNode = {
   name?: string;
@@ -128,7 +129,9 @@ function parseRepoName(url: string) {
     const parts = new URL(url).pathname.split('/').filter(Boolean);
     return parts.slice(0, 2).join('/') || url;
   } catch {
-    return url;
+    const clean = String(url || '').replace(/[\\\/]+$/, '');
+    const segs = clean.split(/[\\/]/).filter(Boolean);
+    return segs[segs.length - 1] || clean || 'local-project';
   }
 }
 
@@ -184,6 +187,20 @@ function slugify(input: string) {
   return input.toLowerCase().replace(/[^a-z0-9_\-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'node';
 }
 
+function functionNameCandidates(fn: string) {
+  const normalized = String(fn || '').trim().replace(/\(\s*\)$/, '');
+  if (!normalized) return [];
+  const candidates = [normalized];
+  const splitters = ['::', '->', '.'];
+  for (const sep of splitters) {
+    if (normalized.includes(sep)) {
+      const tail = normalized.split(sep).filter(Boolean).pop();
+      if (tail) candidates.push(tail.trim());
+    }
+  }
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
 function functionRegexes(fn: string) {
   const escaped = fn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return [
@@ -202,7 +219,8 @@ function functionRegexes(fn: string) {
 
 function fileContainsFunctionDefinition(content: string, fn: string) {
   if (!content || !fn) return false;
-  return functionRegexes(fn).some((re) => re.test(content));
+  const names = functionNameCandidates(fn);
+  return names.some((name) => functionRegexes(name).some((re) => re.test(content)));
 }
 
 function extractFunctionSnippet(content: string, fn: string, maxLen = 7000) {
@@ -235,10 +253,13 @@ function extractFunctionSnippet(content: string, fn: string, maxLen = 7000) {
 function findFunctionLineNumber(content: string, fn: string) {
   if (!content || !fn) return undefined;
   const lines = content.split('\n');
-  const regexes = functionRegexes(fn);
-  for (let i = 0; i < lines.length; i += 1) {
-    if (regexes.some((re) => re.test(lines[i]))) {
-      return i + 1;
+  const names = functionNameCandidates(fn);
+  for (const name of names) {
+    const regexes = functionRegexes(name);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (regexes.some((re) => re.test(lines[i]))) {
+        return i + 1;
+      }
     }
   }
   return undefined;
@@ -292,7 +313,10 @@ export function useGithubAgent() {
   const graphRef = useRef<GraphData | null>(null);
   const panoramaRef = useRef<PanoramaDocState | null>(null);
   const authTokenRef = useRef<string | undefined>(undefined);
+  const sourceTypeRef = useRef<SourceType>('github');
   const nodeSeqRef = useRef(0);
+  const stopRequestedRef = useRef(false);
+  const activeRunIdRef = useRef(0);
 
   const byteLength = (text: string) => {
     try {
@@ -358,6 +382,9 @@ export function useGithubAgent() {
   };
 
   const requestJsonFromLlm = async (prompt: string, options?: { label?: string }) => {
+    if (stopRequestedRef.current) {
+      throw new Error('__ANALYSIS_STOPPED__');
+    }
     setAiUsageStats((prev) => ({ ...prev, callCount: prev.callCount + 1 }));
     const toNonNegativeInt = (value: unknown) => {
       const n = Number(value);
@@ -385,6 +412,9 @@ export function useGithubAgent() {
     };
     try {
       const res = await axios.post('/api/llm/json', { prompt });
+      if (stopRequestedRef.current) {
+        throw new Error('__ANALYSIS_STOPPED__');
+      }
       const data = res.data?.data ?? {};
       const usage = res.data?.usage ?? null;
       const { input, output } = extractUsageTokens(usage);
@@ -445,6 +475,34 @@ export function useGithubAgent() {
       aiTrace
     }]);
   };
+
+  const stopAnalysis = useCallback(() => {
+    if (stopRequestedRef.current) return;
+    stopRequestedRef.current = true;
+    addLog('已请求停止分析，将在当前步骤结束后中止。', 'info');
+  }, []);
+
+  const apiBySource = useCallback((sourceType: SourceType) => {
+    if (sourceType === 'local') {
+      return {
+        validate: '/api/local/validate',
+        tree: '/api/local/tree',
+        content: '/api/local/content',
+        search: '/api/local/search',
+      };
+    }
+    return {
+      validate: '/api/github/validate',
+      tree: '/api/github/tree',
+      content: '/api/github/content',
+      search: '/api/github/search',
+    };
+  }, []);
+
+  const sourcePayload = useCallback((sourceType: SourceType, source: string, token?: string) => {
+    if (sourceType === 'local') return { path: source };
+    return { url: source, token };
+  }, []);
 
   const updatePanorama = useCallback((updater: (prev: PanoramaDocState) => PanoramaDocState) => {
     if (!panoramaRef.current) return;
@@ -602,10 +660,19 @@ export function useGithubAgent() {
   };
 
   const fetchContents = async (url: string, paths: string[], token?: string) => {
+    if (stopRequestedRef.current) {
+      throw new Error('__ANALYSIS_STOPPED__');
+    }
     const uniquePaths = Array.from(new Set(paths.map(sanitizeFilePath).filter(Boolean)));
     const missing = uniquePaths.filter((p) => !(p in contentCacheRef.current));
     if (missing.length > 0) {
-      const res = await axios.post('/api/github/content', { url, paths: missing, token });
+      const sourceType = sourceTypeRef.current;
+      const api = apiBySource(sourceType);
+      const payload = sourcePayload(sourceType, url, token);
+      const res = await axios.post(api.content, { ...payload, paths: missing });
+      if (stopRequestedRef.current) {
+        throw new Error('__ANALYSIS_STOPPED__');
+      }
       const contents = res.data?.contents || {};
       const errors = res.data?.errors || {};
       for (const p of missing) {
@@ -657,6 +724,7 @@ export function useGithubAgent() {
       return CODE_EXTENSIONS.some(ext => lower.endsWith(ext));
     });
     const records = Array.isArray(importedData.callChainRecords) ? importedData.callChainRecords : [];
+    sourceTypeRef.current = /^https?:\/\//i.test(url) ? 'github' : 'local';
 
     setRepoUrl(url);
     graphRef.current = {
@@ -725,28 +793,85 @@ export function useGithubAgent() {
     const { url, token, codeFiles, parentFile, parentFunctionName, functionName, guessedFile, language } = params;
     const attempts: string[] = [];
 
-    const tryFiles = async (candidates: string[]) => {
+    const aiLocateInCandidates = async (stepLabel: string, candidates: string[]) => {
       const sanitized = Array.from(new Set(candidates.map(sanitizeFilePath).filter(Boolean)));
-      if (!sanitized.length) return null as null | { file: string; content: string; line?: number };
+      if (!sanitized.length) {
+        attempts.push(`${stepLabel}-无候选文件可供AI兜底`);
+        return null as null | { file: string; content: string; line?: number };
+      }
       const contents = await fetchContents(url, sanitized, token);
+      const payload = sanitized.map((file) => ({
+        file,
+        contentSnippet: extractFunctionSnippet(contents[file] || '', functionName, 8000),
+      }));
+      attempts.push(`${stepLabel}-提交AI兜底定位(候选${sanitized.length}个)`);
+
+      const prompt = `
+你是代码函数定位助手。请在候选文件中定位目标函数定义所在文件。
+注意：目标函数名可能是限定名（如 TSharkAPI::init），但在 C++ 头文件 class 内只会出现未限定方法名（如 init）。
+
+项目语言：${language}
+调用者函数：${parentFunctionName || '未知'}
+调用者文件：${parentFile || '未知'}
+目标函数：${functionName}
+候选文件内容（节选）：
+${JSON.stringify(payload)}
+
+严格返回 JSON：
+{
+  "found": true,
+  "file": "候选文件中的一个路径",
+  "methodNameHint": "可选，例如 init",
+  "reason": "一句话说明"
+}
+`;
+      const result = await requestJsonFromLlm(prompt, { label: `函数定位AI兜底: ${functionName}` });
+      const file = sanitizeFilePath(result?.file || '');
+      const methodNameHint = String(result?.methodNameHint || '').trim();
+      const found = result?.found === true && sanitized.includes(file);
+      if (!found || !file) {
+        attempts.push(`${stepLabel}-AI兜底未命中: ${String(result?.reason || '未返回有效文件')}`);
+        return null;
+      }
+
+      const content = contents[file] || '';
+      const line = findFunctionLineNumber(content, functionName)
+        ?? (methodNameHint ? findFunctionLineNumber(content, methodNameHint) : undefined);
+      attempts.push(`${stepLabel}-AI兜底命中: ${file}${line ? `:L${line}` : ''}${result?.reason ? ` (${String(result.reason)})` : ''}`);
+      return { file, content, line };
+    };
+
+    const tryFiles = async (stepLabel: string, candidates: string[]) => {
+      const sanitized = Array.from(new Set(candidates.map(sanitizeFilePath).filter(Boolean)));
+      if (!sanitized.length) {
+        attempts.push(`${stepLabel}-无有效候选文件`);
+        return null as null | { file: string; content: string; line?: number };
+      }
+      const preview = sanitized.slice(0, 6).join(', ');
+      attempts.push(`${stepLabel}-候选(${sanitized.length}): ${preview}${sanitized.length > 6 ? ' ...' : ''}`);
+      const contents = await fetchContents(url, sanitized, token);
+      let scanned = 0;
       for (const file of sanitized) {
+        scanned += 1;
         const content = contents[file] || '';
+        if (!content) continue;
         if (fileContainsFunctionDefinition(content, functionName)) {
-          return { file, content, line: findFunctionLineNumber(content, functionName) };
+          const line = findFunctionLineNumber(content, functionName);
+          attempts.push(`${stepLabel}-命中: ${file}${line ? `:L${line}` : ''}`);
+          return { file, content, line };
         }
       }
+      attempts.push(`${stepLabel}-未命中(已扫描${scanned}个文件)`);
       return null;
     };
 
     if (guessedFile) {
-      attempts.push(`step1-猜测文件: ${guessedFile}`);
-      const hit = await tryFiles([guessedFile]);
+      const hit = await tryFiles('step1-猜测文件', [guessedFile]);
       if (hit) return { file: hit.file, content: hit.content, line: hit.line, attempts };
     }
 
     if (parentFile) {
-      attempts.push(`step1b-同文件兜底: ${parentFile}`);
-      const sameFileHit = await tryFiles([parentFile]);
+      const sameFileHit = await tryFiles('step1b-同文件兜底', [parentFile]);
       if (sameFileHit) return { file: sameFileHit.file, content: sameFileHit.content, line: sameFileHit.line, attempts };
     }
 
@@ -785,7 +910,7 @@ ${JSON.stringify(codeFiles.slice(0, 8000))}
       guess?.isSystemOrLibraryFunction === true
       || String(guess?.systemOrLibraryMarker || '').trim() === '__SYSTEM_OR_LIBRARY_FUNCTION__';
     if (isSystemOrLibraryFunction) {
-      attempts.push('step2-命中系统/库函数标记');
+      attempts.push(`step2-命中系统/库函数标记: ${String(guess?.systemOrLibraryReason || guess?.reason || '无说明')}`);
       return {
         file: '',
         content: '',
@@ -796,23 +921,39 @@ ${JSON.stringify(codeFiles.slice(0, 8000))}
       };
     }
     const top3 = Array.isArray(guess.candidateFiles) ? guess.candidateFiles.slice(0, 3) : [];
+    attempts.push(`step2-AI返回候选: ${top3.length ? top3.join(', ') : '空'}${guess?.reason ? ` (原因: ${String(guess.reason)})` : ''}`);
     if (top3.length) {
-      const hit = await tryFiles(top3);
+      const hit = await tryFiles('step2-AI猜测Top3校验', top3);
       if (hit) return { file: hit.file, content: hit.content, line: hit.line, attempts };
-    }
-
-    attempts.push('step3-GitHub搜索函数定义');
-    try {
-      const searchRes = await axios.post('/api/github/search', { url, query: functionName, token });
-      const searchFiles = (searchRes.data?.items || []).map((item: any) => item.path).filter(Boolean);
-      if (searchFiles.length) {
-        const hit = await tryFiles(searchFiles);
-        if (hit) return { file: hit.file, content: hit.content, line: hit.line, attempts };
+      try {
+        const aiFallbackHit = await aiLocateInCandidates('step2b-AI候选文件内容兜底定位', top3);
+        if (aiFallbackHit) return { file: aiFallbackHit.file, content: aiFallbackHit.content, line: aiFallbackHit.line, attempts };
+      } catch (e: any) {
+        attempts.push(`step2b-AI兜底异常: ${e?.message || 'unknown error'}`);
       }
-    } catch {
-      // let caller handle by failed locate
+    } else {
+      attempts.push('step2-AI未给出可校验候选文件');
     }
 
+    attempts.push('step3-源码搜索函数定义');
+    try {
+      const sourceType = sourceTypeRef.current;
+      const api = apiBySource(sourceType);
+      const payload = sourcePayload(sourceType, url, token);
+      const searchRes = await axios.post(api.search, { ...payload, query: functionName });
+      const searchFiles = (searchRes.data?.items || []).map((item: any) => item.path).filter(Boolean);
+      attempts.push(`step3-搜索返回候选(${searchFiles.length}): ${searchFiles.slice(0, 6).join(', ')}${searchFiles.length > 6 ? ' ...' : ''}`);
+      if (searchFiles.length) {
+        const hit = await tryFiles('step3-搜索结果校验', searchFiles);
+        if (hit) return { file: hit.file, content: hit.content, line: hit.line, attempts };
+      } else {
+        attempts.push('step3-搜索无结果');
+      }
+    } catch (e: any) {
+      attempts.push(`step3-搜索异常: ${e?.message || 'unknown error'}`);
+    }
+
+    attempts.push('final-定位失败: 所有步骤均未命中函数定义');
     return { file: '', content: '', line: undefined, attempts, isSystemOrLibraryFunction: false };
   };
 
@@ -1238,7 +1379,8 @@ ${JSON.stringify(params.children)}
     }
     addLog(
       drillLog(`定位成功：${manualChain} -> ${located.file}${located.line ? `:L${located.line}` : ''}`),
-      'thinking'
+      'thinking',
+      located.attempts || []
     );
 
     const analyzed = resolved.analyzed;
@@ -1324,8 +1466,18 @@ ${JSON.stringify(params.children)}
     return map[path] || '';
   }, [repoUrl, graphData?.repoUrl]);
 
-  const analyzeRepo = useCallback(async (url: string, token?: string) => {
+  const analyzeRepo = useCallback(async (url: string, token?: string, sourceType: SourceType = 'github') => {
+    const runId = activeRunIdRef.current + 1;
+    activeRunIdRef.current = runId;
+    stopRequestedRef.current = false;
+    const ensureActive = () => {
+      if (stopRequestedRef.current || runId !== activeRunIdRef.current) {
+        throw new Error('__ANALYSIS_STOPPED__');
+      }
+    };
+
     setRepoUrl(url);
+    sourceTypeRef.current = sourceType;
     setStatus('validating');
     setLogs([]);
     setGraphData(null);
@@ -1341,20 +1493,25 @@ ${JSON.stringify(params.children)}
     graphRef.current = INITIAL_GRAPH(parseRepoName(url));
     setGraphData(graphRef.current);
 
-    addLog(`正在验证仓库地址: ${url}`, 'info');
+    addLog(sourceType === 'local' ? `正在验证本地目录: ${url}` : `正在验证仓库地址: ${url}`, 'info');
 
     try {
-      const validateRes = await axios.post('/api/github/validate', { url, token });
+      ensureActive();
+      const api = apiBySource(sourceType);
+      const basePayload = sourcePayload(sourceType, url, token);
+      const validateRes = await axios.post(api.validate, basePayload);
+      ensureActive();
       if (!validateRes.data.valid) {
-        throw new Error(validateRes.data.error || '无效的 GitHub 仓库地址');
+        throw new Error(validateRes.data.error || (sourceType === 'local' ? '无效的本地目录' : '无效的 GitHub 仓库地址'));
       }
       const repoMeta = validateRes.data.data || {};
       const repoName = repoMeta.full_name || parseRepoName(url);
-      addLog('仓库验证成功', 'success');
+      addLog(sourceType === 'local' ? '本地目录验证成功' : '仓库验证成功', 'success');
 
       setStatus('fetching_tree');
       addLog('正在获取文件结构...', 'info');
-      const treeRes = await axios.post('/api/github/tree', { url, token });
+      const treeRes = await axios.post(api.tree, basePayload);
+      ensureActive();
 
       if (!treeRes.data || !Array.isArray(treeRes.data.tree)) {
         throw new Error('获取文件列表失败: 返回数据格式错误');
@@ -1408,7 +1565,7 @@ ${JSON.stringify(params.children)}
       const manifestFiles = allFiles.filter((f: string) => /(?:package\.json|go\.mod|pom\.xml|requirements\.txt|pyproject\.toml|Cargo\.toml)$/i.test(f)).slice(0, 5);
 
       const entryGuessPrompt = `
-你是一位资深软件架构师。下面是 GitHub 仓库代码文件列表，请识别主要语言、可能入口文件和主入口函数名称（如果能推断）。
+你是一位资深软件架构师。下面是项目代码文件列表，请识别主要语言、可能入口文件和主入口函数名称（如果能推断）。
 
 代码文件列表：
 ${JSON.stringify(codeFiles.slice(0, 10000))}
@@ -1421,6 +1578,7 @@ ${JSON.stringify(codeFiles.slice(0, 10000))}
 }
 `;
       const guessData = await requestJsonFromLlm(entryGuessPrompt, { label: '入口识别：候选入口文件与主入口函数' });
+      ensureActive();
       const language = guessData.language || repoMeta.language || 'Unknown';
       const potentialEntryPoints: string[] = Array.isArray(guessData.potentialEntryPoints) ? guessData.potentialEntryPoints.slice(0, 5) : [];
       const potentialEntryFunctionNames: string[] = Array.isArray(guessData.potentialEntryFunctionNames) ? guessData.potentialEntryFunctionNames.slice(0, 5) : ['main'];
@@ -1438,7 +1596,9 @@ ${JSON.stringify(codeFiles.slice(0, 10000))}
       let entryContent = '';
       if (potentialEntryPoints.length > 0) {
         const verifyMap = await fetchContents(url, potentialEntryPoints.slice(0, 3), token);
+        ensureActive();
         for (const candidate of potentialEntryPoints.slice(0, 3)) {
+          ensureActive();
           const content = verifyMap[candidate] || '';
           if (!content) continue;
           const verifyContent = buildEntryVerifyContentByLines(content);
@@ -1465,6 +1625,7 @@ ${verifyContent}
 }
 `;
           const verify = await requestJsonFromLlm(verifyPrompt, { label: `入口校验: ${candidate}` });
+          ensureActive();
           addLog(`验证候选入口文件: ${candidate}`, 'thinking');
           if (verify.isEntryPoint) {
             entryPoint = candidate;
@@ -1479,17 +1640,19 @@ ${verifyContent}
       }
 
       if (!entryPoint) {
-        addLog('入口文件未确认，启动 GitHub 搜索兜底...', 'thinking');
+        addLog(sourceType === 'local' ? '入口文件未确认，启动本地搜索兜底...' : '入口文件未确认，启动 GitHub 搜索兜底...', 'thinking');
         let searchQuery = 'main start bootstrap app.listen createRoot';
         const lang = language.toLowerCase();
         if (lang.includes('go')) searchQuery = 'func main';
         else if (lang.includes('python')) searchQuery = 'if __name__ == "__main__"';
         else if (lang.includes('rust')) searchQuery = 'fn main';
         else if (lang.includes('java')) searchQuery = 'public static void main';
-        const searchRes = await axios.post('/api/github/search', { url, query: searchQuery, token });
+        const searchRes = await axios.post(api.search, { ...basePayload, query: searchQuery });
+        ensureActive();
         const searchFiles = (searchRes.data?.items || []).map((i: any) => i.path).filter(Boolean);
         if (searchFiles.length) {
           const contentMap = await fetchContents(url, searchFiles.slice(0, 5), token);
+          ensureActive();
           entryPoint = searchFiles[0];
           entryContent = contentMap[entryPoint] || '';
           addLog(`根据搜索结果选择入口文件: ${entryPoint}`, 'success');
@@ -1521,6 +1684,7 @@ ${verifyContent}
       const summaryPaths = [entryPoint, readmeFile, ...manifestFiles].filter(Boolean) as string[];
       try {
         const summaryContents = await fetchContents(url, summaryPaths.slice(0, 6), token);
+        ensureActive();
         const summaryPrompt = `
 你是项目概要分析器。请根据 README、入口文件和清单文件，输出项目中文简介与技术栈（简洁）。
 
@@ -1535,6 +1699,7 @@ ${verifyContent}
 }
 `;
         const summaryResult = await requestJsonFromLlm(summaryPrompt, { label: '项目概要与技术栈生成' });
+        ensureActive();
         const summary = typeof summaryResult.summary === 'string' ? summaryResult.summary : '';
         const techStack = Array.isArray(summaryResult.techStack) ? summaryResult.techStack.map(String).slice(0, 12) : [];
         if (summary || techStack.length) {
@@ -1583,6 +1748,7 @@ ${verifyContent}
       });
 
       while (queue.length > 0) {
+        ensureActive();
         const task = queue.shift()!;
         const visitKey = `${task.depth}:${task.functionName}:${task.possibleFile || task.parentFile || ''}`;
         if (visited.has(visitKey)) continue;
@@ -1615,6 +1781,7 @@ ${verifyContent}
             depth: task.depth,
             isEntry: task.depth === 0,
           });
+          ensureActive();
         } catch (e: any) {
           addLog(drillLog(`函数分析失败: ${drillChain} (${e?.message || '未知错误'})`), 'error');
           updateCallRecord(task.nodeId, { status: 'failed', error: e?.message || '函数分析失败' });
@@ -1684,7 +1851,8 @@ ${verifyContent}
         const analyzed: LlmFunctionAnalysis = resolved.analyzed;
         addLog(
           drillLog(`定位成功：${drillChain} -> ${located.file}${located.line ? `:L${located.line}` : ''}`),
-          'thinking'
+          'thinking',
+          locateAttempts
         );
 
         const currentDesc = analyzed.description || (task.depth === 0 ? '项目入口函数' : '关键调用节点');
@@ -1774,6 +1942,7 @@ ${verifyContent}
       try {
         addLog('AI Agent: 正在基于完整调用链进行模块划分...', 'thinking');
         await classifyModulesAfterAnalysis();
+        ensureActive();
       } catch (e: any) {
         setModuleClassificationFailed(true);
         addLog(`模块划分失败，保留未分组状态: ${e?.message || '未知错误'}`, 'info');
@@ -1782,6 +1951,11 @@ ${verifyContent}
       setStatus('complete');
       addLog('全景图生成完成（逐步下钻模式）', 'success');
     } catch (error: any) {
+      if (error?.message === '__ANALYSIS_STOPPED__') {
+        addLog('分析已停止。', 'info');
+        setStatus('idle');
+        return;
+      }
       console.error(error);
       let errorMessage = error.message || '未知错误';
 
@@ -1794,7 +1968,7 @@ ${verifyContent}
       addLog(`错误: ${errorMessage}`, 'error');
       setStatus('error');
     }
-  }, [updateGraph, updatePanorama, classifyModulesAfterAnalysis, clearFileCache]);
+  }, [updateGraph, updatePanorama, classifyModulesAfterAnalysis, clearFileCache, apiBySource, sourcePayload]);
 
   return {
     status,
@@ -1809,6 +1983,7 @@ ${verifyContent}
     maxChildCallsPerFunction: MAX_CHILD_CALLS_PER_FUNCTION,
     moduleClassificationFailed,
     isReanalyzingModules,
+    stopAnalysis,
     manualDrillNode,
     reanalyzeModules,
     loadFileContent,
