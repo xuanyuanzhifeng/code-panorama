@@ -11,17 +11,17 @@
   }
 
   .scrollbar-custom::-webkit-scrollbar-thumb {
-    background-color: rgba(51, 65, 85, 0.5); /* slate-700 with opacity */
+    background-color: rgba(87, 83, 78, 0.5); /* stone-600 with opacity */
     border-radius: 9999px;
   }
 
   .scrollbar-custom::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(71, 85, 105, 0.8); /* slate-600 with opacity */
+    background-color: rgba(120, 113, 108, 0.8); /* stone-500 with opacity */
   }
 
   .scrollbar-panel-dark {
     scrollbar-width: thin;
-    scrollbar-color: rgba(100, 116, 139, 0.55) transparent;
+    scrollbar-color: rgba(120, 113, 108, 0.55) transparent;
   }
 
   .scrollbar-panel-dark::-webkit-scrollbar {
@@ -34,21 +34,21 @@
   }
 
   .scrollbar-panel-dark::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, rgba(100, 116, 139, 0.55), rgba(71, 85, 105, 0.65));
+    background: linear-gradient(180deg, rgba(120, 113, 108, 0.55), rgba(87, 83, 78, 0.65));
     border-radius: 9999px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
 
   .scrollbar-panel-dark::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(180deg, rgba(148, 163, 184, 0.7), rgba(100, 116, 139, 0.8));
+    background: linear-gradient(180deg, rgba(168, 162, 158, 0.7), rgba(120, 113, 108, 0.8));
     border: 2px solid transparent;
     background-clip: padding-box;
   }
 
   .scrollbar-panel-light {
     scrollbar-width: thin;
-    scrollbar-color: rgba(148, 163, 184, 0.9) transparent;
+    scrollbar-color: rgba(168, 162, 158, 0.9) transparent;
   }
 
   .scrollbar-panel-light::-webkit-scrollbar {
@@ -61,14 +61,14 @@
   }
 
   .scrollbar-panel-light::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, rgba(203, 213, 225, 0.95), rgba(148, 163, 184, 0.9));
+    background: linear-gradient(180deg, rgba(214, 211, 209, 0.95), rgba(168, 162, 158, 0.9));
     border-radius: 9999px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
 
   .scrollbar-panel-light::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(180deg, rgba(148, 163, 184, 1), rgba(100, 116, 139, 0.95));
+    background: linear-gradient(180deg, rgba(168, 162, 158, 1), rgba(120, 113, 108, 0.95));
     border: 2px solid transparent;
     background-clip: padding-box;
   }

@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 
-function normalizeBaseUrl(url: string): string {
+export function normalizeBaseUrl(url: string): string {
   if (!url) return url;
   const normalized = url.replace(/\/+$/, "");
   return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
@@ -8,23 +8,27 @@ function normalizeBaseUrl(url: string): string {
 
 export const llmBaseUrl = normalizeBaseUrl(process.env.LLM_BASE_URL || "https://api.openai.com/v1");
 export const llmApiKey = process.env.LLM_API_KEY || "";
-export const llmModel = process.env.LLM_MODEL || "gpt-4o-mini";
+export const llmModel = process.env.LLM_MODEL || "gemini-3-flash-preview";
 
-let client: OpenAI | null = null;
+const clientMap = new Map<string, OpenAI>();
 
-export function getLlmClient() {
+export function getLlmClient(options?: { baseUrl?: string }) {
   if (!llmApiKey) {
     throw new Error("LLM_API_KEY is not set.");
   }
 
-  if (!client) {
-    client = new OpenAI({
-      baseURL: llmBaseUrl,
+  const resolvedBaseUrl = normalizeBaseUrl(options?.baseUrl || llmBaseUrl);
+  const cacheKey = resolvedBaseUrl || "__default__";
+  const hit = clientMap.get(cacheKey);
+  if (hit) return hit;
+
+  const client = new OpenAI({
+      baseURL: resolvedBaseUrl,
       apiKey: llmApiKey,
       timeout: 120000,
-    });
-  }
+  });
 
+  clientMap.set(cacheKey, client);
   return client;
 }
 

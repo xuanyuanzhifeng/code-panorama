@@ -9,6 +9,8 @@ interface CustomNodeData extends Record<string, unknown> {
   type: 'function' | 'class' | 'file' | 'module';
   file: string;
   line?: number | string;
+  httpMethod?: string;
+  httpRoute?: string;
   importance: 'high' | 'medium' | 'low';
   description: string;
   module: string;
@@ -27,27 +29,28 @@ type CustomNodeType = Node<CustomNodeData>;
 
 const CustomNode = ({ data, id }: NodeProps<CustomNodeType>) => {
   const isHighImportance = data.importance === 'high';
-  const headerColor = data.color || (isHighImportance ? '#3b82f6' : '#64748b'); // Blue or Slate
+  const headerColor = data.color || (isHighImportance ? '#d97706' : '#64748b'); // Blue or Slate
   const isDark = data.theme === 'dark';
   const isManualDrilling = data.isLeaf && data.callStatus === 'analyzing';
   const rawLine = data.line;
   const parsedLine = typeof rawLine === 'number' ? rawLine : Number(rawLine);
   const lineSuffix = Number.isFinite(parsedLine) && parsedLine > 0 ? `(L${Math.floor(parsedLine)})` : '';
   const fileName = data.file.split('/').pop() || data.file;
+  const endpoint = data.httpRoute ? `${data.httpMethod ? `${data.httpMethod} ` : ''}${data.httpRoute}` : '';
   
   return (
     <div 
       className={clsx(
         "rounded-md border shadow-sm min-w-[240px] transition-all duration-300 overflow-visible",
         "hover:shadow-md cursor-pointer relative",
-        isDark ? "bg-slate-900 border-slate-700" : "bg-white border-gray-200",
+        isDark ? "bg-stone-900 border-stone-700" : "bg-white border-stone-200",
         data.isDimmed ? "opacity-40 grayscale" : "opacity-100",
         data.isHighlighted 
-            ? (isDark ? "ring-2 ring-offset-1 ring-offset-slate-950 ring-blue-500 scale-105 z-10" : "ring-2 ring-offset-1 ring-blue-400 scale-105 z-10") 
+            ? (isDark ? "ring-2 ring-offset-1 ring-offset-stone-900 ring-amber-500 scale-105 z-10" : "ring-2 ring-offset-1 ring-amber-400 scale-105 z-10") 
             : ""
       )}
     >
-      <Handle type="target" position={Position.Left} className="w-2 h-2 !bg-gray-400 !-left-1" />
+      <Handle type="target" position={Position.Left} className="w-2 h-2 !bg-stone-400 !-left-1" />
       
       <div className="rounded-[inherit] overflow-hidden">
         {/* Header: File Name */}
@@ -67,11 +70,22 @@ const CustomNode = ({ data, id }: NodeProps<CustomNodeType>) => {
 
         {/* Body: Function Name */}
         <div className="px-3 py-2.5">
-          <div className={clsx("text-sm font-bold truncate", isDark ? "text-slate-200" : "text-gray-800")} title={data.label}>
+          <div className={clsx("text-sm font-bold truncate", isDark ? "text-stone-200" : "text-stone-800")} title={data.label}>
             {data.label}
           </div>
+          {endpoint && (
+            <div
+              className={clsx(
+                "mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-mono",
+                isDark ? "bg-emerald-950/50 text-emerald-300" : "bg-emerald-50 text-emerald-700"
+              )}
+              title={endpoint}
+            >
+              {endpoint}
+            </div>
+          )}
           {data.description && (
-            <div className={clsx("text-[10px] mt-1 line-clamp-2 leading-tight", isDark ? "text-slate-400" : "text-gray-500")}>
+            <div className={clsx("text-[10px] mt-1 line-clamp-2 leading-tight", isDark ? "text-stone-400" : "text-stone-500")}>
               {data.description}
             </div>
           )}
@@ -82,7 +96,7 @@ const CustomNode = ({ data, id }: NodeProps<CustomNodeType>) => {
         <div
           className={clsx(
             "absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 z-20 rounded-full p-0.5 nodrag nopan shadow-sm",
-            isDark ? "bg-slate-800/90 text-[#3C81F6]" : "bg-white border border-gray-200 text-[#3C81F6]"
+            isDark ? "bg-stone-800/90 text-[#d97706]" : "bg-white border border-stone-200 text-[#d97706]"
           )}
           title="正在分析中..."
         >
@@ -95,7 +109,7 @@ const CustomNode = ({ data, id }: NodeProps<CustomNodeType>) => {
           type="button"
           className={clsx(
             "absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 z-20 rounded-full p-0.5 nodrag nopan transition-colors shadow-sm cursor-pointer",
-            isDark ? "bg-slate-800/90 hover:bg-slate-700 text-[#3C81F6]" : "bg-white border border-gray-200 hover:bg-blue-50 text-[#3C81F6]"
+            isDark ? "bg-stone-800/90 hover:bg-stone-700 text-[#d97706]" : "bg-white border border-stone-200 hover:bg-amber-50 text-[#d97706]"
           )}
           title="手动下钻下一层"
           onClick={(e) => {
@@ -110,7 +124,7 @@ const CustomNode = ({ data, id }: NodeProps<CustomNodeType>) => {
       <Handle 
         type="source" 
         position={Position.Bottom} 
-        className="w-2 h-2 !bg-gray-400 !-bottom-1 !left-1/2 !-translate-x-1/2" 
+        className="w-2 h-2 !bg-stone-400 !-bottom-1 !left-1/2 !-translate-x-1/2" 
       />
     </div>
   );

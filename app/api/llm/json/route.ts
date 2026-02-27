@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { extractJsonFromText, getLlmClient, llmBaseUrl, llmModel } from "@/lib/openaiCompat";
+import { extractJsonFromText, getLlmClient, llmBaseUrl, llmModel, normalizeBaseUrl } from "@/lib/openaiCompat";
 import { createAiCallId, logAiError, logAiRequest, logAiResponse } from "@/lib/aiCallLogger";
 
 export const runtime = "nodejs";
@@ -7,13 +7,14 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   const callId = createAiCallId();
   try {
-    const { prompt, model, temperature } = await request.json();
+    const { prompt, model, temperature, baseUrl } = await request.json();
 
     if (!prompt || typeof prompt !== "string") {
       return NextResponse.json({ error: "Invalid prompt" }, { status: 400 });
     }
 
     const resolvedModel = model || llmModel;
+    const resolvedBaseUrl = normalizeBaseUrl(String(baseUrl || llmBaseUrl));
     const requestBody = {
       model: resolvedModel,
       messages: [
@@ -31,11 +32,11 @@ export async function POST(request: Request) {
 
     logAiRequest({
       callId,
-      providerBaseUrl: llmBaseUrl,
+      providerBaseUrl: resolvedBaseUrl,
       requestBody,
     });
 
-    const client = getLlmClient();
+    const client = getLlmClient({ baseUrl: resolvedBaseUrl });
     const response = await client.chat.completions.create(requestBody as any);
 
     const text = response.choices?.[0]?.message?.content || "";
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
 
     logAiResponse({
       callId,
-      providerBaseUrl: llmBaseUrl,
+      providerBaseUrl: resolvedBaseUrl,
       response: {
         id: response.id,
         model: response.model,
@@ -60,13 +61,13 @@ export async function POST(request: Request) {
     return NextResponse.json({
       data,
       model: response.model,
-      providerBaseUrl: llmBaseUrl,
+      providerBaseUrl: resolvedBaseUrl,
       usage: response.usage ?? null,
     });
   } catch (error: any) {
     logAiError({
       callId,
-      providerBaseUrl: llmBaseUrl,
+      providerBaseUrl: normalizeBaseUrl(String((error as any)?.providerBaseUrl || llmBaseUrl)),
       error: {
         message: error?.message || "LLM request failed",
         status: error?.status || error?.response?.status || null,

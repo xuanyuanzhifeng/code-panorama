@@ -54,6 +54,10 @@ const GraphViewerInner = forwardRef<GraphViewerRef, GraphViewerProps>(({ data, t
     }
     return node.file;
   };
+  const formatHttpEndpoint = (node: GraphNode) => {
+    if (!node.httpRoute) return '';
+    return `${node.httpMethod ? `${node.httpMethod} ` : ''}${node.httpRoute}`;
+  };
 
   useImperativeHandle(ref, () => ({
     exportImage: async () => {
@@ -72,7 +76,7 @@ const GraphViewerInner = forwardRef<GraphViewerRef, GraphViewerProps>(({ data, t
       
       if (element) {
         try {
-            const bgColor = theme === 'dark' ? '#020617' : '#f8fafc'; // slate-950 or slate-50
+            const bgColor = theme === 'dark' ? '#1c1917' : '#fafaf9'; // stone-900 or stone-50
             const desiredPixelRatio = 6;
             const maxExportPixels = 120_000_000; // safety cap to reduce browser canvas failures
             const basePixels = Math.max(1, imageWidth * imageHeight);
@@ -123,7 +127,7 @@ const GraphViewerInner = forwardRef<GraphViewerRef, GraphViewerProps>(({ data, t
   }, [data, activeModule, setNodes, setEdges, theme, onManualDrill, maxDrillDepth]);
 
   const onConnect = useCallback(
-    (params: Connection) => setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: theme === 'dark' ? '#475569' : '#94a3b8' } } as Edge, eds)),
+    (params: Connection) => setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: theme === 'dark' ? '#57534e' : '#a8a29e' } } as Edge, eds)),
     [setEdges, theme],
   );
 
@@ -153,6 +157,8 @@ const GraphViewerInner = forwardRef<GraphViewerRef, GraphViewerProps>(({ data, t
       && latestNode.label === selectedNode.label
       && latestNode.file === selectedNode.file
       && latestNode.line === selectedNode.line
+      && latestNode.httpRoute === selectedNode.httpRoute
+      && latestNode.httpMethod === selectedNode.httpMethod
       && moduleName === selectedNode.module
     ) {
       return;
@@ -177,7 +183,7 @@ const GraphViewerInner = forwardRef<GraphViewerRef, GraphViewerProps>(({ data, t
   if (!data) return null;
 
   return (
-    <div className={`w-full h-full flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+    <div className={`w-full h-full flex flex-col ${theme === 'dark' ? 'bg-stone-900' : 'bg-stone-50'}`}>
       <div className="flex-1 relative overflow-hidden">
         <ReactFlow
             nodes={nodes}
@@ -194,12 +200,12 @@ const GraphViewerInner = forwardRef<GraphViewerRef, GraphViewerProps>(({ data, t
             minZoom={0.1}
         >
             <Background 
-                color={theme === 'dark' ? '#334155' : '#e2e8f0'} 
+                color={theme === 'dark' ? '#44403c' : '#e7e5e4'} 
                 gap={16} 
                 variant={BackgroundVariant.Dots}
             />
             <Controls 
-                className={`${theme === 'dark' ? 'bg-slate-800 border-slate-700 [&>button]:!bg-slate-800 [&>button]:!border-slate-700 [&>button]:!fill-slate-300 [&>button:hover]:!bg-slate-700' : 'bg-white border-gray-200 shadow-sm'}`} 
+                className={`${theme === 'dark' ? 'bg-stone-800 border-stone-700 [&>button]:!bg-stone-800 [&>button]:!border-stone-700 [&>button]:!fill-stone-300 [&>button:hover]:!bg-stone-700' : 'bg-white border-stone-200 shadow-sm'}`} 
             />
         </ReactFlow>
 
@@ -212,37 +218,46 @@ const GraphViewerInner = forwardRef<GraphViewerRef, GraphViewerProps>(({ data, t
                 exit={{ opacity: 0, y: 20, scale: 0.95 }}
                 className={`absolute bottom-6 right-6 z-20 w-80 rounded-xl shadow-2xl border overflow-hidden ${
                     theme === 'dark' 
-                        ? 'bg-slate-900 border-slate-700 shadow-black/50' 
-                        : 'bg-white border-gray-200'
+                        ? 'bg-stone-900 border-stone-700 shadow-black/50' 
+                        : 'bg-white border-stone-200'
                 }`}
             >
                 <div className={`px-4 py-3 border-b flex justify-between items-start ${
-                    theme === 'dark' ? 'bg-slate-950 border-slate-800' : 'bg-gray-50 border-gray-100'
+                    theme === 'dark' ? 'bg-stone-900 border-stone-800' : 'bg-stone-50 border-stone-100'
                 }`}>
                 <div>
-                    <h3 className={`font-bold ${theme === 'dark' ? 'text-slate-100' : 'text-gray-900'}`}>{selectedNode.label}</h3>
-                    <p className={`text-xs font-mono mt-0.5 ${theme === 'dark' ? 'text-slate-500' : 'text-gray-500'}`}>
+                    <h3 className={`font-bold ${theme === 'dark' ? 'text-stone-100' : 'text-stone-900'}`}>{selectedNode.label}</h3>
+                    <p className={`text-xs font-mono mt-0.5 ${theme === 'dark' ? 'text-stone-500' : 'text-stone-500'}`}>
                       {formatFileWithLine(selectedNode)}
                     </p>
                 </div>
-                <button onClick={() => setSelectedNode(null)} className={`${theme === 'dark' ? 'text-slate-500 hover:text-slate-300' : 'text-gray-400 hover:text-gray-600'}`}>
+                <button onClick={() => setSelectedNode(null)} className={`${theme === 'dark' ? 'text-stone-500 hover:text-stone-300' : 'text-stone-400 hover:text-stone-600'}`}>
                     <X size={16} />
                 </button>
                 </div>
                 <div className="p-4">
                 <div className="mb-3">
-                    <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-700 mr-2">
+                    <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-700 mr-2">
                     {selectedNode.type}
                     </span>
                     {selectedNode.module && (
                     <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                        theme === 'dark' ? 'bg-slate-800 text-slate-300' : 'bg-gray-100 text-gray-700'
+                        theme === 'dark' ? 'bg-stone-800 text-stone-300' : 'bg-stone-100 text-stone-700'
                     }`}>
                         {selectedNode.module}
                     </span>
                     )}
                 </div>
-                <label className={`mb-1 block text-xs font-medium ${theme === 'dark' ? 'text-slate-400' : 'text-gray-500'}`}>
+                {formatHttpEndpoint(selectedNode) && (
+                  <div className={`mb-3 rounded-md border px-2 py-1 font-mono text-xs ${
+                    theme === 'dark'
+                      ? 'border-emerald-900 bg-emerald-950/40 text-emerald-300'
+                      : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  }`}>
+                    {formatHttpEndpoint(selectedNode)}
+                  </div>
+                )}
+                <label className={`mb-1 block text-xs font-medium ${theme === 'dark' ? 'text-stone-400' : 'text-stone-500'}`}>
                     函数功能描述
                 </label>
                 <textarea
@@ -251,8 +266,8 @@ const GraphViewerInner = forwardRef<GraphViewerRef, GraphViewerProps>(({ data, t
                   rows={4}
                   className={`w-full resize-none rounded-lg border px-3 py-2 text-sm leading-relaxed outline-none transition-colors ${
                     theme === 'dark'
-                      ? 'border-slate-700 bg-slate-950 text-slate-200 placeholder:text-slate-500 focus:border-blue-500'
-                      : 'border-gray-300 bg-white text-gray-700 placeholder:text-gray-400 focus:border-blue-500'
+                      ? 'border-stone-700 bg-stone-900 text-stone-200 placeholder:text-stone-500 focus:border-amber-500'
+                      : 'border-stone-300 bg-white text-stone-700 placeholder:text-stone-400 focus:border-amber-500'
                   }`}
                   placeholder="请输入函数功能描述"
                 />
@@ -262,8 +277,8 @@ const GraphViewerInner = forwardRef<GraphViewerRef, GraphViewerProps>(({ data, t
                     onClick={handleCancelDescription}
                     className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                       theme === 'dark'
-                        ? 'border border-slate-700 text-slate-300 hover:bg-slate-800'
-                        : 'border border-gray-300 text-gray-600 hover:bg-gray-100'
+                        ? 'border border-stone-700 text-stone-300 hover:bg-stone-800'
+                        : 'border border-stone-300 text-stone-600 hover:bg-stone-100'
                     }`}
                   >
                     取消
@@ -272,7 +287,7 @@ const GraphViewerInner = forwardRef<GraphViewerRef, GraphViewerProps>(({ data, t
                     type="button"
                     onClick={handleSaveDescription}
                     disabled={!onUpdateNodeDescription || draftDescription.trim() === (selectedNode.description || '').trim()}
-                    className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     保存
                   </button>

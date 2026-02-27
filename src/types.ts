@@ -16,6 +16,8 @@ export interface GraphNode {
   type: 'function' | 'class' | 'file' | 'module';
   file: string;
   line?: number;
+  httpMethod?: string;
+  httpRoute?: string;
   importance: 'high' | 'medium' | 'low';
   description: string;
   module: string; // Module ID

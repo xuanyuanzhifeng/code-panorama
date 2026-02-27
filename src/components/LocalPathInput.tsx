@@ -43,21 +43,21 @@ export function LocalPathInput({ onAnalyze, isLoading, theme, topContent }: Loca
     <div className={clsx(
       "w-full p-8 backdrop-blur-xl rounded-2xl shadow-2xl border relative group overflow-hidden transition-colors duration-500",
       isDark
-        ? "bg-slate-900/80 border-slate-800"
-        : "bg-white/80 border-gray-200 shadow-blue-100"
+        ? "bg-stone-900/80 border-stone-800"
+        : "bg-white/80 border-amber-100 shadow-amber-100"
     )}>
       <div className={clsx(
         "absolute -top-20 -right-20 w-40 h-40 rounded-full blur-3xl transition-all duration-700",
         isDark
-          ? "bg-cyan-500/10 group-hover:bg-cyan-500/20"
-          : "bg-cyan-400/20 group-hover:bg-cyan-400/30"
+          ? "bg-orange-500/10 group-hover:bg-orange-500/20"
+          : "bg-orange-400/20 group-hover:bg-orange-400/30"
       )}></div>
 
       {topContent}
 
       <p className={clsx(
         "mb-8 text-sm relative z-10 transition-colors",
-        isDark ? "text-slate-400" : "text-slate-500"
+        isDark ? "text-stone-400" : "text-stone-500"
       )}>
         输入本机项目目录绝对路径，AI 将分析该目录代码并生成可视化全景图。
       </p>
@@ -66,8 +66,8 @@ export function LocalPathInput({ onAnalyze, isLoading, theme, topContent }: Loca
         <div className={clsx(
           "flex items-stretch rounded-xl overflow-hidden border focus-within:ring-2 transition-all",
           isDark
-            ? "border-slate-700 focus-within:ring-blue-500/50"
-            : "border-gray-200 focus-within:ring-blue-500/30"
+            ? "border-stone-700 focus-within:ring-amber-500/50"
+            : "border-amber-200 focus-within:ring-amber-500/30"
         )}>
           <input
             type="text"
@@ -77,8 +77,8 @@ export function LocalPathInput({ onAnalyze, isLoading, theme, topContent }: Loca
             className={clsx(
               "w-full px-4 py-3.5 outline-none text-sm",
               isDark
-                ? "bg-slate-950/50 text-slate-200 placeholder-slate-600"
-                : "bg-gray-50 text-slate-800 placeholder-slate-400"
+                ? "bg-stone-900/50 text-stone-200 placeholder-stone-600"
+                : "bg-amber-50/50 text-stone-800 placeholder-stone-400"
             )}
             required
           />
@@ -89,8 +89,8 @@ export function LocalPathInput({ onAnalyze, isLoading, theme, topContent }: Loca
             className={clsx(
               "shrink-0 inline-flex items-center justify-center gap-1.5 px-4 text-sm font-semibold border-l transition-colors disabled:opacity-60 disabled:cursor-not-allowed",
               isDark
-                ? "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
-                : "border-gray-200 bg-white text-slate-600 hover:bg-gray-50"
+                ? "border-stone-700 bg-stone-900 text-stone-300 hover:bg-stone-800"
+                : "border-amber-200 bg-white text-stone-600 hover:bg-amber-50"
             )}
             title="选择本地目录"
           >
@@ -102,7 +102,7 @@ export function LocalPathInput({ onAnalyze, isLoading, theme, topContent }: Loca
         <button
           type="submit"
           disabled={isLoading || !localPath}
-          className="w-full py-3.5 px-6 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow-lg shadow-blue-900/20 hover:shadow-blue-900/40 transform hover:-translate-y-0.5 active:translate-y-0"
+          className="w-full py-3.5 px-6 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow-lg shadow-amber-900/20 hover:shadow-amber-900/40 transform hover:-translate-y-0.5 active:translate-y-0"
         >
           {isLoading ? (
             <>

@@ -1,9 +1,16 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { GraphData, LogEntry, AgentStatus, GraphNode, GraphEdge, GraphModule, AiUsageStats } from '../types';
 
 type DrillFlag = -1 | 0 | 1;
 type SourceType = 'github' | 'local';
+
+type AgentSettings = {
+  llmBaseUrl?: string;
+  llmModel?: string;
+  maxDrillDepth?: number;
+  maxChildCallsPerFunction?: number;
+};
 
 type LlmCallNode = {
   name?: string;
@@ -55,6 +62,34 @@ type LocateResult = {
   systemOrLibraryReason?: string;
 };
 
+type FrameworkBridgeChild = {
+  name: string;
+  type: 'method';
+  description: string;
+  importance: 'high' | 'medium' | 'low';
+  shouldDrill: 1;
+  possibleFile: string;
+  httpMethod?: string;
+  httpRoute?: string;
+};
+
+type FrameworkBridgeContext = {
+  language: string;
+  functionName: string;
+  reason?: string;
+  url: string;
+  token?: string;
+  codeFiles: string[];
+  maxChildren: number;
+};
+
+type FrameworkBridgeStrategy = {
+  id: string;
+  name: string;
+  match: (ctx: FrameworkBridgeContext) => boolean;
+  discover: (ctx: FrameworkBridgeContext) => Promise<FrameworkBridgeChild[]>;
+};
+
 type PanoramaDocState = {
   metadata: {
     repoUrl: string;
@@ -70,7 +105,16 @@ type PanoramaDocState = {
     entryPoint?: string;
     records: CallChainRecord[];
     graph: {
-      nodes: Array<{ id: string; label: string; file: string; line?: number; depth?: number; description?: string }>;
+      nodes: Array<{
+        id: string;
+        label: string;
+        file: string;
+        line?: number;
+        depth?: number;
+        description?: string;
+        httpMethod?: string;
+        httpRoute?: string;
+      }>;
       edges: Array<{ source: string; target: string }>;
     };
   };
@@ -140,6 +184,121 @@ function sanitizeFilePath(path?: string) {
   return path.replace(/^\.\//, '').trim();
 }
 
+function normalizeHttpRoute(path?: string) {
+  const p = String(path || '').trim().replace(/^["']|["']$/g, '');
+  if (!p) return '';
+  const withSlash = p.startsWith('/') ? p : `/${p}`;
+  return withSlash.replace(/\/{2,}/g, '/');
+}
+
+function mergeHttpRoutes(prefix?: string, route?: string) {
+  const a = normalizeHttpRoute(prefix);
+  const b = normalizeHttpRoute(route);
+  if (!a) return b;
+  if (!b) return a;
+  return `${a}/${b}`.replace(/\/{2,}/g, '/');
+}
+
+function extractRouteFromMappingArgs(args?: string) {
+  const text = String(args || '');
+  const named = text.match(/\b(?:path|value)\s*=\s*["']([^"']+)["']/);
+  if (named?.[1]) return normalizeHttpRoute(named[1]);
+  const firstArg = text.match(/\(\s*["']([^"']+)["']/);
+  if (firstArg?.[1]) return normalizeHttpRoute(firstArg[1]);
+  const rawFirstArg = text.match(/^\s*["']([^"']+)["']/);
+  if (rawFirstArg?.[1]) return normalizeHttpRoute(rawFirstArg[1]);
+  return '';
+}
+
+function detectHttpEndpointFromLocatedFunction(params: {
+  language: string;
+  fileContent: string;
+  functionName: string;
+}): { httpMethod?: string; httpRoute?: string } {
+  const language = String(params.language || '').toLowerCase();
+  const content = String(params.fileContent || '');
+  const fn = String(params.functionName || '').trim();
+  if (!content || !fn) return {};
+
+  if (language.includes('java')) {
+    const lines = content.split(/\r?\n/);
+    const names = functionNameCandidates(fn);
+    let lineIdx = -1;
+    for (const name of names) {
+      const regs = functionRegexes(name);
+      const idx = lines.findIndex((line) => regs.some((re) => re.test(line)));
+      if (idx >= 0) { lineIdx = idx; break; }
+    }
+    if (lineIdx < 0) return {};
+
+    const annText = lines.slice(Math.max(0, lineIdx - 14), lineIdx + 1).join('\n');
+    let httpMethod: string | undefined;
+    let methodRoute = '';
+
+    const getMatch = annText.match(/@GetMapping(?:\s*\(([\s\S]*?)\))?/);
+    const postMatch = annText.match(/@PostMapping(?:\s*\(([\s\S]*?)\))?/);
+    const putMatch = annText.match(/@PutMapping(?:\s*\(([\s\S]*?)\))?/);
+    const deleteMatch = annText.match(/@DeleteMapping(?:\s*\(([\s\S]*?)\))?/);
+    const patchMatch = annText.match(/@PatchMapping(?:\s*\(([\s\S]*?)\))?/);
+    const reqMatch = annText.match(/@RequestMapping(?:\s*\(([\s\S]*?)\))?/);
+
+    if (getMatch) { httpMethod = 'GET'; methodRoute = extractRouteFromMappingArgs(getMatch[1]); }
+    else if (postMatch) { httpMethod = 'POST'; methodRoute = extractRouteFromMappingArgs(postMatch[1]); }
+    else if (putMatch) { httpMethod = 'PUT'; methodRoute = extractRouteFromMappingArgs(putMatch[1]); }
+    else if (deleteMatch) { httpMethod = 'DELETE'; methodRoute = extractRouteFromMappingArgs(deleteMatch[1]); }
+    else if (patchMatch) { httpMethod = 'PATCH'; methodRoute = extractRouteFromMappingArgs(patchMatch[1]); }
+    else if (reqMatch) {
+      const reqArgs = String(reqMatch[1] || '');
+      const methodMatch = reqArgs.match(/RequestMethod\.(GET|POST|PUT|DELETE|PATCH)/i);
+      httpMethod = methodMatch?.[1]?.toUpperCase();
+      methodRoute = extractRouteFromMappingArgs(reqArgs);
+    }
+
+    const classMappingMatch = content.match(/@RequestMapping\s*\(([\s\S]*?)\)\s*(?:public\s+)?class\b/);
+    const classRoute = classMappingMatch?.[1] ? extractRouteFromMappingArgs(classMappingMatch[1]) : '';
+    const finalRoute = mergeHttpRoutes(classRoute, methodRoute);
+
+    if (!httpMethod && !finalRoute) return {};
+    return { httpMethod, httpRoute: finalRoute || undefined };
+  }
+
+  if (language.includes('python')) {
+    const lines = content.split(/\r?\n/);
+    const names = functionNameCandidates(fn);
+    let lineIdx = -1;
+    let matchedName = '';
+    for (const name of names) {
+      const idx = lines.findIndex((line) => new RegExp(`^\\s*def\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(line));
+      if (idx >= 0) { lineIdx = idx; matchedName = name; break; }
+    }
+    if (lineIdx < 0 || !matchedName) return {};
+
+    const decorators: string[] = [];
+    for (let i = lineIdx - 1; i >= 0; i -= 1) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      if (!line.startsWith('@')) break;
+      decorators.unshift(line);
+    }
+    const decoText = decorators.join('\n');
+    const routeMatch = decoText.match(/@([A-Za-z_]\w*)?\.?route\s*\(([\s\S]*?)\)/m);
+    if (!routeMatch) return {};
+
+    const args = routeMatch[2] || '';
+    const pathMatch = args.match(/["']([^"']+)["']/);
+    const methodsMatch = args.match(/\bmethods\s*=\s*\[([^\]]+)\]/);
+    const methods = methodsMatch?.[1]
+      ? Array.from(methodsMatch[1].matchAll(/["']([A-Za-z]+)["']/g)).map((m) => m[1].toUpperCase())
+      : [];
+    return {
+      httpMethod: methods.length ? methods.join(',') : 'GET',
+      httpRoute: pathMatch?.[1] ? normalizeHttpRoute(pathMatch[1]) : undefined,
+    };
+  }
+
+  return {};
+}
+
 function buildEntryVerifyContentByLines(content: string) {
   const lines = String(content || '').split(/\r?\n/);
   const total = lines.length;
@@ -185,6 +344,42 @@ function normalizeNodeType(value: unknown): GraphNode['type'] {
 
 function slugify(input: string) {
   return input.toLowerCase().replace(/[^a-z0-9_\-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'node';
+}
+
+function isPythonMainGuardName(input: string) {
+  const v = String(input || '').toLowerCase().replace(/\s+/g, '');
+  return v.includes('__name__') && v.includes('__main__');
+}
+
+function findPythonMainGuardLine(content: string) {
+  const lines = String(content || '').split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i].replace(/\s+/g, '');
+    if (line.includes('if__name__==') && line.includes('__main__')) {
+      return i + 1;
+    }
+  }
+  return undefined;
+}
+
+function chooseEntryFunctionName(params: {
+  language: string;
+  candidates: string[];
+  entryContent: string;
+}) {
+  const language = String(params.language || '').toLowerCase();
+  const cleaned = Array.from(new Set((params.candidates || []).map((x) => String(x || '').trim()).filter(Boolean)));
+  if (!language.includes('python')) {
+    return cleaned[0] || 'main';
+  }
+
+  const nonGuard = cleaned.filter((name) => !isPythonMainGuardName(name));
+  const entryContent = String(params.entryContent || '');
+  const hasDefMain = /^\s*def\s+main\s*\(/m.test(entryContent);
+
+  if (hasDefMain) return 'main';
+  if (nonGuard.length > 0) return nonGuard[0];
+  return '__module_entry__';
 }
 
 function functionNameCandidates(fn: string) {
@@ -297,7 +492,7 @@ function buildPanoramaMarkdown(doc: PanoramaDocState) {
   ].join('\n');
 }
 
-export function useGithubAgent() {
+export function useGithubAgent(settings?: AgentSettings) {
   const [status, setStatus] = useState<AgentStatus>('idle');
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [graphData, setGraphData] = useState<GraphData | null>(null);
@@ -308,7 +503,12 @@ export function useGithubAgent() {
   const [isReanalyzingModules, setIsReanalyzingModules] = useState(false);
 
   const contentCacheRef = useRef<Record<string, string>>({});
-  const functionLocateCacheRef = useRef<Record<string, { file: string; attempts: string[] }>>({});
+  const functionLocateCacheRef = useRef<Record<string, {
+    file: string;
+    attempts: string[];
+    isSystemOrLibraryFunction?: boolean;
+    systemOrLibraryReason?: string;
+  }>>({});
   const functionDrillCacheRef = useRef<Record<string, { file: string; analysis: LlmFunctionAnalysis }>>({});
   const graphRef = useRef<GraphData | null>(null);
   const panoramaRef = useRef<PanoramaDocState | null>(null);
@@ -317,6 +517,10 @@ export function useGithubAgent() {
   const nodeSeqRef = useRef(0);
   const stopRequestedRef = useRef(false);
   const activeRunIdRef = useRef(0);
+  const llmBaseUrl = String(settings?.llmBaseUrl || '').trim();
+  const llmModel = String(settings?.llmModel || '').trim();
+  const maxDrillDepth = Math.max(1, Math.min(8, Math.floor(Number(settings?.maxDrillDepth || DEFAULT_MAX_DRILL_DEPTH))));
+  const maxChildCallsPerFunction = Math.max(1, Math.min(30, Math.floor(Number(settings?.maxChildCallsPerFunction || MAX_CHILD_CALLS_PER_FUNCTION))));
 
   const byteLength = (text: string) => {
     try {
@@ -411,7 +615,11 @@ export function useGithubAgent() {
       return { input, output };
     };
     try {
-      const res = await axios.post('/api/llm/json', { prompt });
+      const res = await axios.post('/api/llm/json', {
+        prompt,
+        ...(llmModel ? { model: llmModel } : {}),
+        ...(llmBaseUrl ? { baseUrl: llmBaseUrl } : {}),
+      });
       if (stopRequestedRef.current) {
         throw new Error('__ANALYSIS_STOPPED__');
       }
@@ -528,7 +736,16 @@ export function useGithubAgent() {
     setGraphData(next);
     if (panoramaRef.current) {
       panoramaRef.current.callChain.graph = {
-        nodes: next.nodes.map(n => ({ id: n.id, label: n.label, file: n.file, line: n.line, depth: n.depth, description: n.description })),
+        nodes: next.nodes.map(n => ({
+          id: n.id,
+          label: n.label,
+          file: n.file,
+          line: n.line,
+          depth: n.depth,
+          description: n.description,
+          httpMethod: n.httpMethod,
+          httpRoute: n.httpRoute,
+        })),
         edges: next.edges.map(e => ({ source: e.source, target: e.target })),
       };
       const markdown = buildPanoramaMarkdown(panoramaRef.current);
@@ -553,6 +770,8 @@ export function useGithubAgent() {
     label: string;
     file: string;
     line?: number;
+    httpMethod?: string;
+    httpRoute?: string;
     module?: string;
     type?: string;
     importance?: string;
@@ -570,6 +789,8 @@ export function useGithubAgent() {
         type: normalizeNodeType(payload.type),
         file,
         line: payload.line,
+        httpMethod: payload.httpMethod ?? existingNode?.httpMethod,
+        httpRoute: payload.httpRoute ?? existingNode?.httpRoute,
         importance: normalizeImportance(payload.importance),
         description: payload.description || '分析进行中',
         module: payload.module || existingNode?.module || '',
@@ -747,7 +968,7 @@ export function useGithubAgent() {
       allFiles,
       codeFiles,
       callChain: {
-        maxDepth: DEFAULT_MAX_DRILL_DEPTH,
+        maxDepth: maxDrillDepth,
         entryPoint: records.find((r) => r.depth === 0)?.file,
         records: records as CallChainRecord[],
         graph: {
@@ -758,6 +979,8 @@ export function useGithubAgent() {
             line: n.line,
             depth: n.depth,
             description: n.description,
+            httpMethod: n.httpMethod,
+            httpRoute: n.httpRoute,
           })),
           edges: (importedData.edges || []).map((e) => ({ source: e.source, target: e.target })),
         },
@@ -973,11 +1196,12 @@ ${JSON.stringify(codeFiles.slice(0, 8000))}
 请分析下面文件中的目标函数（仅输出关键调用节点，忽略琐碎辅助函数）。
 
 规则：
-1. 只关注核心功能流程，输出最重要的关键函数/关键方法调用，最多输出 ${MAX_CHILD_CALLS_PER_FUNCTION} 个子节点。
+1. 只关注核心功能流程，输出最重要的关键函数/关键方法调用，最多输出 ${maxChildCallsPerFunction} 个子节点。
 2. 每个子节点返回 shouldDrill：-1（叶子或不重要）、0（不确定）、1（值得继续下钻）。
 3. 如果能根据 import/include 或命名推断出子函数定义文件，请填 possibleFile（项目相对路径）。
 4. 描述要简短中文。
 ${isEntry ? '5. 这是入口分析步骤，请把当前函数视为主入口函数。' : ''}
+6. 遇到框架启动/分发调用（如 SpringApplication.run、DispatcherServlet、Flask app.run）时，请将其视为“桥接节点”并设置 shouldDrill=1（不要直接作为终点）。
 
 项目语言：${language}
 当前层级：${depth}
@@ -1027,6 +1251,15 @@ ${snippet}
       url, token, codeFiles, parentFile, parentFunctionName, functionName, guessedFile, language, depth, isEntry,
     } = params;
 
+    const isPython = String(language || '').toLowerCase().includes('python');
+    const shouldUsePythonEntryBypass = isPython
+      && !!guessedFile
+      && (
+        isEntry === true
+        || functionName === '__module_entry__'
+        || isPythonMainGuardName(functionName)
+      );
+
     const locateCacheKey = [
       language,
       functionName,
@@ -1044,41 +1277,61 @@ ${snippet}
       isSystemOrLibraryFunction: false,
     };
 
-    const cachedLocate = functionLocateCacheRef.current[locateCacheKey];
-    if (cachedLocate) {
-      locateHit = true;
-      if (cachedLocate.file) {
-        const contents = await fetchContents(url, [cachedLocate.file], token);
-        located = {
-          file: cachedLocate.file,
-          content: contents[cachedLocate.file] || '',
-          line: findFunctionLineNumber(contents[cachedLocate.file] || '', functionName),
-          attempts: [...cachedLocate.attempts, 'cache-hit: locate'],
-        };
+    if (shouldUsePythonEntryBypass) {
+      const sanitizedFile = sanitizeFilePath(guessedFile);
+      const contents = await fetchContents(url, [sanitizedFile], token);
+      const content = contents[sanitizedFile] || '';
+      located = {
+        file: sanitizedFile,
+        content,
+        line: functionName === '__module_entry__'
+          ? findPythonMainGuardLine(content)
+          : (findFunctionLineNumber(content, functionName) ?? findPythonMainGuardLine(content)),
+        attempts: ['step0-python-entry-bypass: 入口文件直读分析'],
+        isSystemOrLibraryFunction: false,
+      };
+    } else {
+      const cachedLocate = functionLocateCacheRef.current[locateCacheKey];
+      if (cachedLocate) {
+        locateHit = true;
+        if (cachedLocate.file) {
+          const contents = await fetchContents(url, [cachedLocate.file], token);
+          located = {
+            file: cachedLocate.file,
+            content: contents[cachedLocate.file] || '',
+            line: findFunctionLineNumber(contents[cachedLocate.file] || '', functionName),
+            attempts: [...cachedLocate.attempts, 'cache-hit: locate'],
+            isSystemOrLibraryFunction: cachedLocate.isSystemOrLibraryFunction === true,
+            systemOrLibraryReason: cachedLocate.systemOrLibraryReason,
+          };
+        } else {
+          located = {
+            file: '',
+            content: '',
+            line: undefined,
+            attempts: [...cachedLocate.attempts, 'cache-hit: locate-miss'],
+            isSystemOrLibraryFunction: cachedLocate.isSystemOrLibraryFunction === true,
+            systemOrLibraryReason: cachedLocate.systemOrLibraryReason,
+          };
+        }
       } else {
-        located = {
-          file: '',
-          content: '',
-          line: undefined,
-          attempts: [...cachedLocate.attempts, 'cache-hit: locate-miss'],
-          isSystemOrLibraryFunction: false,
+        located = await locateFunctionFile({
+          url,
+          token,
+          codeFiles,
+          parentFile,
+          parentFunctionName,
+          functionName,
+          guessedFile,
+          language,
+        });
+        functionLocateCacheRef.current[locateCacheKey] = {
+          file: located.file || '',
+          attempts: located.attempts || [],
+          isSystemOrLibraryFunction: located.isSystemOrLibraryFunction === true,
+          systemOrLibraryReason: located.systemOrLibraryReason,
         };
       }
-    } else {
-      located = await locateFunctionFile({
-        url,
-        token,
-        codeFiles,
-        parentFile,
-        parentFunctionName,
-        functionName,
-        guessedFile,
-        language,
-      });
-      functionLocateCacheRef.current[locateCacheKey] = {
-        file: located.file || '',
-        attempts: located.attempts || [],
-      };
     }
 
     if (located.isSystemOrLibraryFunction) {
@@ -1115,6 +1368,264 @@ ${snippet}
 
     return { located, analyzed, cache: { locateHit, drillHit: false } };
   }, [analyzeFunctionStep]);
+
+  const discoverSpringBootBridgeChildren = useCallback(async (ctx: FrameworkBridgeContext): Promise<FrameworkBridgeChild[]> => {
+    const maxChildren = Math.max(1, ctx.maxChildren || maxChildCallsPerFunction);
+    const javaFiles = (ctx.codeFiles || []).filter((f) => String(f || '').toLowerCase().endsWith('.java'));
+    if (!javaFiles.length) return [];
+
+    const extractAnnoPath = (annoText: string) => {
+      const pathNamed = annoText.match(/\b(?:path|value)\s*=\s*["']([^"']+)["']/);
+      if (pathNamed?.[1]) return normalizeHttpRoute(pathNamed[1]);
+      const firstArg = annoText.match(/\(\s*["']([^"']+)["']/);
+      if (firstArg?.[1]) return normalizeHttpRoute(firstArg[1]);
+      return '';
+    };
+
+    const extractRequestMappingMethod = (annoText: string) => {
+      const map: Record<string, string> = {
+        GET: 'GET',
+        POST: 'POST',
+        PUT: 'PUT',
+        DELETE: 'DELETE',
+        PATCH: 'PATCH',
+      };
+      const byExplicit = annoText.match(/RequestMethod\.(GET|POST|PUT|DELETE|PATCH)/i);
+      if (byExplicit?.[1]) return map[byExplicit[1].toUpperCase()] || undefined;
+      return undefined;
+    };
+
+    const controllerFiles = javaFiles.filter((f) => /(^|\/)(controller|api)(\/|$)/i.test(f) || /Controller\.java$/i.test(f));
+    const runnerFiles = javaFiles.filter((f) => /(Application|Runner|Startup)/i.test(f));
+    const scanFiles = Array.from(new Set([...controllerFiles, ...runnerFiles, ...javaFiles])).slice(0, 120);
+    const contentMap = await fetchContents(ctx.url, scanFiles, ctx.token);
+
+    const results: FrameworkBridgeChild[] = [];
+    const seen = new Set<string>();
+    const mappingAnno = /@(RequestMapping|GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping)\b/;
+    const methodDef = /^\s*(?:public|protected|private)\s+(?:static\s+)?(?:[\w<>\[\],.?]+\s+)+([A-Za-z_]\w*)\s*\([^;]*\)\s*(?:throws\s+[^{]+)?\{/;
+
+    for (const file of scanFiles) {
+      if (results.length >= maxChildren) break;
+      const content = contentMap[file] || '';
+      if (!content) continue;
+
+      const isController = /@(RestController|Controller)\b/.test(content) || /Controller\.java$/i.test(file);
+      const classMatch = content.match(/\bclass\s+([A-Za-z_]\w*)\b/);
+      const className = classMatch?.[1] || file.split('/').pop()?.replace(/\.java$/i, '') || 'UnknownClass';
+      const classMappingMatch = content.match(/@RequestMapping\s*\(([\s\S]*?)\)\s*(?:public\s+)?class\b/);
+      const classBasePath = classMappingMatch?.[1] ? extractAnnoPath(classMappingMatch[1]) : '';
+      const lines = content.split(/\r?\n/);
+
+      if (isController) {
+        for (let i = 0; i < lines.length; i += 1) {
+          const line = lines[i];
+          const methodMatch = line.match(methodDef);
+          if (!methodMatch) continue;
+
+          const windowStart = Math.max(0, i - 10);
+          const annText = lines.slice(windowStart, i + 1).join('\n');
+          if (!mappingAnno.test(annText)) continue;
+
+          const methodName = methodMatch[1];
+          const signature = `${file}#${className}.${methodName}`;
+          if (seen.has(signature)) continue;
+          seen.add(signature);
+
+          const getMatch = annText.match(/@GetMapping\s*\(([\s\S]*?)\)/);
+          const postMatch = annText.match(/@PostMapping\s*\(([\s\S]*?)\)/);
+          const putMatch = annText.match(/@PutMapping\s*\(([\s\S]*?)\)/);
+          const deleteMatch = annText.match(/@DeleteMapping\s*\(([\s\S]*?)\)/);
+          const patchMatch = annText.match(/@PatchMapping\s*\(([\s\S]*?)\)/);
+          const reqMatch = annText.match(/@RequestMapping\s*\(([\s\S]*?)\)/);
+
+          let method: string | undefined;
+          let route = '';
+          if (getMatch?.[1]) { method = 'GET'; route = extractAnnoPath(getMatch[1]); }
+          else if (postMatch?.[1]) { method = 'POST'; route = extractAnnoPath(postMatch[1]); }
+          else if (putMatch?.[1]) { method = 'PUT'; route = extractAnnoPath(putMatch[1]); }
+          else if (deleteMatch?.[1]) { method = 'DELETE'; route = extractAnnoPath(deleteMatch[1]); }
+          else if (patchMatch?.[1]) { method = 'PATCH'; route = extractAnnoPath(patchMatch[1]); }
+          else if (reqMatch?.[1]) {
+            method = extractRequestMappingMethod(reqMatch[1]);
+            route = extractAnnoPath(reqMatch[1]);
+          }
+
+          const httpRoute = mergeHttpRoutes(classBasePath, route);
+          results.push({
+            name: `${className}.${methodName}`,
+            type: 'method',
+            description: 'Spring Web 业务入口（HTTP 请求处理）',
+            importance: 'high',
+            shouldDrill: 1,
+            possibleFile: file,
+            httpMethod: method,
+            httpRoute: httpRoute || undefined,
+          });
+          if (results.length >= maxChildren) break;
+        }
+      }
+    }
+
+    if (results.length < maxChildren) {
+      for (const file of scanFiles) {
+        if (results.length >= maxChildren) break;
+        const content = contentMap[file] || '';
+        if (!content) continue;
+        if (!/(implements\s+[^{;]*(CommandLineRunner|ApplicationRunner)|@EventListener\b|@Scheduled\b)/.test(content)) continue;
+
+        const classMatch = content.match(/\bclass\s+([A-Za-z_]\w*)\b/);
+        const className = classMatch?.[1] || file.split('/').pop()?.replace(/\.java$/i, '') || 'UnknownClass';
+        const lines = content.split(/\r?\n/);
+        for (const line of lines) {
+          const methodMatch = line.match(methodDef);
+          if (!methodMatch) continue;
+          const methodName = methodMatch[1];
+          if (methodName !== 'run') continue;
+
+          const signature = `${file}#${className}.${methodName}`;
+          if (seen.has(signature)) continue;
+          seen.add(signature);
+          results.push({
+            name: `${className}.${methodName}`,
+            type: 'method',
+            description: 'Spring 启动后业务入口（Runner）',
+            importance: 'high',
+            shouldDrill: 1,
+            possibleFile: file,
+          });
+          if (results.length >= maxChildren) break;
+        }
+      }
+    }
+
+    return results.slice(0, maxChildren);
+  }, [fetchContents, maxChildCallsPerFunction]);
+
+  const discoverFlaskBridgeChildren = useCallback(async (ctx: FrameworkBridgeContext): Promise<FrameworkBridgeChild[]> => {
+    const maxChildren = Math.max(1, ctx.maxChildren || maxChildCallsPerFunction);
+    const pyFiles = (ctx.codeFiles || []).filter((f) => String(f || '').toLowerCase().endsWith('.py'));
+    if (!pyFiles.length) return [];
+
+    const priorityFiles = pyFiles.filter((f) => /(app|main|server|routes|views)\.py$/i.test(f));
+    const scanFiles = Array.from(new Set([...priorityFiles, ...pyFiles])).slice(0, 120);
+    const contentMap = await fetchContents(ctx.url, scanFiles, ctx.token);
+
+    const results: FrameworkBridgeChild[] = [];
+    const seen = new Set<string>();
+    const defRegex = /^\s*def\s+([A-Za-z_]\w*)\s*\(/;
+
+    for (const file of scanFiles) {
+      if (results.length >= maxChildren) break;
+      const content = contentMap[file] || '';
+      if (!content) continue;
+
+      const lines = content.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i += 1) {
+        if (results.length >= maxChildren) break;
+        const defMatch = lines[i].match(defRegex);
+        if (!defMatch) continue;
+
+        const fnName = defMatch[1];
+        const windowStart = Math.max(0, i - 12);
+        const decoratorText = lines.slice(windowStart, i).join('\n');
+        const routeMatch = decoratorText.match(/@([A-Za-z_]\w*)?\.?route\s*\(([\s\S]*?)\)/m);
+        if (!routeMatch) continue;
+
+        const args = routeMatch[2] || '';
+        const pathMatch = args.match(/["']([^"']+)["']/);
+        const methodsMatch = args.match(/\bmethods\s*=\s*\[([^\]]+)\]/);
+        const methods = methodsMatch?.[1]
+          ? Array.from(methodsMatch[1].matchAll(/["']([A-Za-z]+)["']/g)).map((m) => m[1].toUpperCase())
+          : [];
+
+        const httpRoute = pathMatch?.[1] ? normalizeHttpRoute(pathMatch[1]) : undefined;
+        const httpMethod = methods.length ? methods.join(',') : 'GET';
+        const signature = `${file}#${fnName}`;
+        if (seen.has(signature)) continue;
+        seen.add(signature);
+
+        results.push({
+          name: fnName,
+          type: 'method',
+          description: 'Flask 业务入口（HTTP 请求处理）',
+          importance: 'high',
+          shouldDrill: 1,
+          possibleFile: file,
+          httpMethod,
+          httpRoute,
+        });
+      }
+    }
+
+    return results.slice(0, maxChildren);
+  }, [fetchContents, maxChildCallsPerFunction]);
+
+  // Add new framework bridges here (e.g. Django, NestJS, ASP.NET) without touching drill pipeline logic.
+  const frameworkBridgeStrategies = useMemo<FrameworkBridgeStrategy[]>(() => ([
+    {
+      id: 'java_spring_boot_runtime_bridge',
+      name: 'Java Spring Boot 框架桥接',
+      match: (ctx) => {
+        const language = String(ctx.language || '').toLowerCase();
+        if (!language.includes('java')) return false;
+        const functionName = String(ctx.functionName || '').toLowerCase();
+        const reason = String(ctx.reason || '').toLowerCase();
+        if (functionName.includes('springapplication.run')) return true;
+        if (functionName.includes('dispatcherservlet') || functionName.includes('dofilter')) {
+          return reason.includes('spring') || reason.includes('framework');
+        }
+        return false;
+      },
+      discover: discoverSpringBootBridgeChildren,
+    },
+    {
+      id: 'python_flask_runtime_bridge',
+      name: 'Python Flask 框架桥接',
+      match: (ctx) => {
+        const language = String(ctx.language || '').toLowerCase();
+        if (!language.includes('python')) return false;
+        const functionName = String(ctx.functionName || '').toLowerCase();
+        const reason = String(ctx.reason || '').toLowerCase();
+        if (functionName.includes('app.run') || functionName.includes('flask.run')) return true;
+        if (functionName.includes('dispatch_request') || functionName.includes('wsgi_app')) {
+          return reason.includes('flask') || reason.includes('werkzeug') || reason.includes('framework');
+        }
+        return reason.includes('flask') && functionName.includes('run');
+      },
+      discover: discoverFlaskBridgeChildren,
+    },
+  ]), [discoverFlaskBridgeChildren, discoverSpringBootBridgeChildren]);
+
+  const tryBridgeFrameworkCall = useCallback(async (params: {
+    language: string;
+    functionName: string;
+    reason?: string;
+    url: string;
+    token?: string;
+    codeFiles: string[];
+    maxChildren?: number;
+  }) => {
+    const ctx: FrameworkBridgeContext = {
+      language: params.language,
+      functionName: params.functionName,
+      reason: params.reason,
+      url: params.url,
+      token: params.token,
+      codeFiles: params.codeFiles || [],
+      maxChildren: Math.max(1, params.maxChildren ?? maxChildCallsPerFunction),
+    };
+
+    for (const strategy of frameworkBridgeStrategies) {
+      if (!strategy.match(ctx)) continue;
+      const children = await strategy.discover(ctx);
+      if (children.length > 0) {
+        return { strategyId: strategy.id, strategyName: strategy.name, children };
+      }
+    }
+
+    return null as null | { strategyId: string; strategyName: string; children: FrameworkBridgeChild[] };
+  }, [frameworkBridgeStrategies, maxChildCallsPerFunction]);
 
   const classifyModulesAfterAnalysis = useCallback(async () => {
     const panorama = panoramaRef.current;
@@ -1343,6 +1854,69 @@ ${JSON.stringify(params.children)}
 
     if (!located.file || !located.content || !resolved.analyzed) {
       if (located.isSystemOrLibraryFunction) {
+        const bridgeResult = await tryBridgeFrameworkCall({
+          language: currentPanorama.metadata.language || 'Unknown',
+          functionName: record.functionName,
+          reason: located.systemOrLibraryReason,
+          url,
+          token,
+          codeFiles: currentPanorama.codeFiles || [],
+          maxChildren: maxChildCallsPerFunction,
+        });
+        if (bridgeResult) {
+          try {
+            const bridgeChildren = bridgeResult.children;
+            if (bridgeChildren.length > 0) {
+              updateCallRecord(nodeId, { status: 'done' });
+              upsertGraphNode({
+                id: nodeId,
+                label: record.functionName,
+                file: record.file || 'FrameworkBridge',
+                line: record.line,
+                description: `框架桥接节点（${bridgeResult.strategyName}：${located.systemOrLibraryReason || '框架运行时调用'}），已转入项目业务入口继续下钻`,
+                depth: record.depth,
+                drillFlag: 1,
+                callStatus: 'done',
+              });
+              addLog(
+                drillLog(`命中框架桥接策略[${bridgeResult.strategyId}]: ${manualChain}，已发现 ${bridgeChildren.length} 个业务入口继续分析`),
+                'info'
+              );
+              for (const child of bridgeChildren) {
+                const childNodeId = makeNodeId(nodeId, child.name, record.depth + 1);
+                upsertGraphNode({
+                  id: childNodeId,
+                  label: child.name,
+                  file: child.possibleFile,
+                  httpMethod: child.httpMethod,
+                  httpRoute: child.httpRoute,
+                  module: (graphRef.current?.nodes || []).find((n) => n.id === nodeId)?.module
+                    || (graphRef.current?.modules || [])[0]?.id
+                    || '',
+                  type: child.type,
+                  importance: child.importance,
+                  description: child.description,
+                  depth: record.depth + 1,
+                  drillFlag: 1,
+                  callStatus: 'queued',
+                });
+                upsertGraphEdge(nodeId, childNodeId);
+                appendCallRecord({
+                  nodeId: childNodeId,
+                  functionName: child.name,
+                  file: child.possibleFile,
+                  depth: record.depth + 1,
+                  drillFlag: 1,
+                  parentNodeId: nodeId,
+                  status: 'queued',
+                });
+              }
+              return;
+            }
+          } catch (e: any) {
+            addLog(drillLog(`框架桥接失败，回退为停止下钻: ${manualChain} (${e?.message || '未知错误'})`), 'info');
+          }
+        }
         updateCallRecord(nodeId, {
           status: 'skipped',
           error: `系统/库函数，停止下钻：${located.systemOrLibraryReason || '已标记'}`,
@@ -1384,12 +1958,19 @@ ${JSON.stringify(params.children)}
     );
 
     const analyzed = resolved.analyzed;
+    const endpointMeta = detectHttpEndpointFromLocatedFunction({
+      language: currentPanorama.metadata.language || 'Unknown',
+      fileContent: located.content,
+      functionName: analyzed.functionName || record.functionName,
+    });
 
     upsertGraphNode({
       id: nodeId,
       label: analyzed.functionName || record.functionName,
       file: located.file,
       line: located.line,
+      httpMethod: endpointMeta.httpMethod,
+      httpRoute: endpointMeta.httpRoute,
       type: analyzed.functionType,
       importance: analyzed.importance,
       description: analyzed.description || '手动下钻分析完成',
@@ -1399,7 +1980,7 @@ ${JSON.stringify(params.children)}
     });
     updateCallRecord(nodeId, { status: 'done', file: located.file, line: located.line });
 
-    const children = Array.isArray(analyzed.calls) ? analyzed.calls.slice(0, MAX_CHILD_CALLS_PER_FUNCTION) : [];
+    const children = Array.isArray(analyzed.calls) ? analyzed.calls.slice(0, maxChildCallsPerFunction) : [];
     addLog(drillLog(`手动下钻完成，新增候选子节点 ${children.length} 个: ${manualChain}`), 'success');
 
     const parentModuleId = (graphRef.current?.nodes || []).find((n) => n.id === nodeId)?.module
@@ -1536,7 +2117,7 @@ ${JSON.stringify(params.children)}
         allFiles,
         codeFiles,
         callChain: {
-          maxDepth: DEFAULT_MAX_DRILL_DEPTH,
+          maxDepth: maxDrillDepth,
           entryPoint: undefined,
           records: [],
           graph: { nodes: [], edges: [] },
@@ -1663,21 +2244,25 @@ ${verifyContent}
         throw new Error('无法找到项目入口文件，分析终止。');
       }
 
-      const entryFunctionName = Array.from(new Set([
-        ...potentialEntryFunctionNames,
-        'main', 'bootstrap', 'start', 'init', 'App'
-      ].map((x: unknown) => String(x || '').trim()).filter(Boolean)))[0] || 'main';
+      const entryFunctionName = chooseEntryFunctionName({
+        language,
+        entryContent,
+        candidates: Array.from(new Set([
+          ...potentialEntryFunctionNames,
+          'main', 'bootstrap', 'start', 'init', 'App'
+        ].map((x: unknown) => String(x || '').trim()).filter(Boolean))),
+      });
 
       updatePanorama(prev => ({
         ...prev,
         callChain: { ...prev.callChain, entryPoint },
-        summary: `入口文件已确认：${entryPoint}。正在按最大 ${DEFAULT_MAX_DRILL_DEPTH} 层递归下钻调用链。`,
+        summary: `入口文件已确认：${entryPoint}。正在按最大 ${maxDrillDepth} 层递归下钻调用链。`,
       }));
       updateGraph(prev => ({
         ...prev,
         project: {
           ...prev.project,
-          summary: `入口文件 ${entryPoint} 已确认，正在递归下钻关键函数调用链（最多 ${DEFAULT_MAX_DRILL_DEPTH} 层）。`,
+          summary: `入口文件 ${entryPoint} 已确认，正在递归下钻关键函数调用链（最多 ${maxDrillDepth} 层）。`,
         }
       }));
 
@@ -1758,8 +2343,8 @@ ${verifyContent}
           updateCallRecord(task.nodeId, { status: 'skipped' });
           continue;
         }
-        if (task.depth > DEFAULT_MAX_DRILL_DEPTH) {
-          updateCallRecord(task.nodeId, { status: 'skipped', error: `超过最大下钻层级 ${DEFAULT_MAX_DRILL_DEPTH}` });
+        if (task.depth > maxDrillDepth) {
+          updateCallRecord(task.nodeId, { status: 'skipped', error: `超过最大下钻层级 ${maxDrillDepth}` });
           continue;
         }
 
@@ -1798,8 +2383,85 @@ ${verifyContent}
           );
         }
 
-        if (!located.file || !located.content || !resolved.analyzed) {
+      if (!located.file || !located.content || !resolved.analyzed) {
           if (located.isSystemOrLibraryFunction) {
+            const bridgeResult = await tryBridgeFrameworkCall({
+              language,
+              functionName: task.functionName,
+              reason: located.systemOrLibraryReason,
+              url,
+              token,
+              codeFiles,
+              maxChildren: maxChildCallsPerFunction,
+            });
+            if (bridgeResult) {
+              try {
+                const bridgeChildren = bridgeResult.children;
+                if (bridgeChildren.length > 0) {
+                  addLog(
+                    drillLog(`命中框架桥接策略[${bridgeResult.strategyId}]: ${drillChain}，转入 ${bridgeChildren.length} 个业务入口继续下钻`),
+                    'info'
+                  );
+                  updateCallRecord(task.nodeId, {
+                    status: 'done',
+                    drillFlag: 1,
+                  });
+                  upsertGraphNode({
+                    id: task.nodeId,
+                    label: task.functionName,
+                    file: task.possibleFile || task.parentFile || 'FrameworkBridge',
+                    description: `框架桥接节点（${bridgeResult.strategyName}：${located.systemOrLibraryReason || '框架运行时调用'}），已切换到项目业务入口继续下钻`,
+                    importance: 'medium',
+                    depth: task.depth,
+                    drillFlag: 1,
+                    callStatus: 'done',
+                  });
+
+                  for (const child of bridgeChildren) {
+                    const childNodeId = makeNodeId(task.nodeId, child.name, task.depth + 1);
+                    upsertGraphNode({
+                      id: childNodeId,
+                      label: child.name,
+                      file: child.possibleFile,
+                      httpMethod: child.httpMethod,
+                      httpRoute: child.httpRoute,
+                      type: child.type,
+                      importance: child.importance,
+                      description: child.description,
+                      depth: task.depth + 1,
+                      drillFlag: 1,
+                      callStatus: 'queued',
+                    });
+                    upsertGraphEdge(task.nodeId, childNodeId);
+                    appendCallRecord({
+                      nodeId: childNodeId,
+                      functionName: child.name,
+                      file: child.possibleFile,
+                      line: undefined,
+                      depth: task.depth + 1,
+                      drillFlag: 1,
+                      parentNodeId: task.nodeId,
+                      status: 'queued',
+                    });
+                    if (task.depth + 1 <= maxDrillDepth) {
+                      queue.push({
+                        nodeId: childNodeId,
+                        functionName: child.name,
+                        parentNodeId: task.nodeId,
+                        parentFile: child.possibleFile,
+                        parentFunctionName: task.functionName,
+                        possibleFile: child.possibleFile,
+                        depth: task.depth + 1,
+                        drillFlag: 1,
+                      });
+                    }
+                  }
+                  continue;
+                }
+              } catch (e: any) {
+                addLog(drillLog(`框架桥接失败，回退为停止下钻: ${drillChain} (${e?.message || '未知错误'})`), 'info');
+              }
+            }
             addLog(
               drillLog(`停止下钻（系统/库函数）: ${drillChain}，原因：${located.systemOrLibraryReason || 'AI 已标记'}`),
               'thinking'
@@ -1856,11 +2518,18 @@ ${verifyContent}
         );
 
         const currentDesc = analyzed.description || (task.depth === 0 ? '项目入口函数' : '关键调用节点');
+        const endpointMeta = detectHttpEndpointFromLocatedFunction({
+          language,
+          fileContent: located.content,
+          functionName: analyzed.functionName || task.functionName,
+        });
         upsertGraphNode({
           id: task.nodeId,
           label: analyzed.functionName || task.functionName,
           file: located.file,
           line: located.line,
+          httpMethod: endpointMeta.httpMethod,
+          httpRoute: endpointMeta.httpRoute,
           type: analyzed.functionType,
           importance: analyzed.importance || (task.depth === 0 ? 'high' : 'medium'),
           description: currentDesc,
@@ -1869,7 +2538,7 @@ ${verifyContent}
           callStatus: 'done',
         });
 
-        const children = Array.isArray(analyzed.calls) ? analyzed.calls.slice(0, MAX_CHILD_CALLS_PER_FUNCTION) : [];
+        const children = Array.isArray(analyzed.calls) ? analyzed.calls.slice(0, maxChildCallsPerFunction) : [];
         addLog(drillLog(`发现 ${children.length} 个关键子调用节点: ${drillChain}`), 'info');
 
         for (const child of children) {
@@ -1904,7 +2573,7 @@ ${verifyContent}
             status: drillFlag === -1 ? 'skipped' : 'queued',
           });
 
-          if (task.depth + 1 <= DEFAULT_MAX_DRILL_DEPTH && drillFlag !== -1) {
+          if (task.depth + 1 <= maxDrillDepth && drillFlag !== -1) {
             queue.push({
               nodeId: childNodeId,
               functionName: childName,
@@ -1968,7 +2637,7 @@ ${verifyContent}
       addLog(`错误: ${errorMessage}`, 'error');
       setStatus('error');
     }
-  }, [updateGraph, updatePanorama, classifyModulesAfterAnalysis, clearFileCache, apiBySource, sourcePayload]);
+  }, [updateGraph, updatePanorama, classifyModulesAfterAnalysis, clearFileCache, apiBySource, sourcePayload, maxDrillDepth, maxChildCallsPerFunction]);
 
   return {
     status,
@@ -1979,8 +2648,8 @@ ${verifyContent}
     projectPanoramaMarkdown,
     setProjectPanoramaMarkdown,
     aiUsageStats,
-    maxDrillDepth: DEFAULT_MAX_DRILL_DEPTH,
-    maxChildCallsPerFunction: MAX_CHILD_CALLS_PER_FUNCTION,
+    maxDrillDepth,
+    maxChildCallsPerFunction,
     moduleClassificationFailed,
     isReanalyzingModules,
     stopAnalysis,

@@ -39,21 +39,21 @@ export function AgentLog({ logs, status, theme = 'dark', hideHeader = false, emb
       {!hideHeader && (
         <div className={clsx(
           "px-4 py-3 border-b flex items-center justify-between shrink-0",
-          isDark ? "bg-slate-900/90 border-slate-800" : "bg-gray-50 border-gray-200"
+          isDark ? "bg-stone-900/90 border-stone-800" : "bg-stone-50 border-stone-200"
         )}>
           <div className="flex items-center gap-2">
-              <div className={clsx("p-1 rounded", isDark ? "bg-slate-800" : "bg-white border border-gray-200")}>
-                  <Terminal className={clsx("w-3.5 h-3.5", isDark ? "text-slate-400" : "text-slate-500")} />
+              <div className={clsx("p-1 rounded", isDark ? "bg-stone-800" : "bg-white border border-stone-200")}>
+                  <Terminal className={clsx("w-3.5 h-3.5", isDark ? "text-stone-400" : "text-stone-500")} />
               </div>
-              <span className={clsx("text-xs font-mono font-bold tracking-wide", isDark ? "text-slate-300" : "text-slate-700")}>AGENT_TERMINAL</span>
+              <span className={clsx("text-xs font-mono font-bold tracking-wide", isDark ? "text-stone-300" : "text-stone-700")}>AGENT_TERMINAL</span>
           </div>
           {status && (
               <span className={clsx(
                   "text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider border",
-                  isRunning ? "bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse" :
+                  isRunning ? "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse" :
                   status === 'complete' ? "bg-green-500/10 text-green-400 border-green-500/20" :
                   status === 'error' ? "bg-red-500/10 text-red-400 border-red-500/20" :
-                  "bg-slate-800 text-slate-400 border-slate-700"
+                  "bg-stone-800 text-stone-400 border-stone-700"
               )}>
                   {status}
               </span>
@@ -68,7 +68,7 @@ export function AgentLog({ logs, status, theme = 'dark', hideHeader = false, emb
           "flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3 font-mono text-xs scrollbar-custom",
           embedded
             ? (isDark ? "bg-transparent" : "bg-transparent")
-            : (isDark ? "bg-slate-950/50" : "bg-white")
+            : (isDark ? "bg-stone-900/50" : "bg-white")
         )}
       >
         <AnimatePresence initial={false}>
@@ -91,13 +91,13 @@ export function AgentLog({ logs, status, theme = 'dark', hideHeader = false, emb
                 log.type === 'error' ? "text-red-400 border-red-500/50 bg-red-500/5 rounded-r" :
                 log.type === 'success' ? "text-green-400 border-green-500/50" :
                 log.type === 'thinking' ? "" :
-                isDark ? "text-slate-300 border-slate-700" : "text-slate-700 border-gray-300"
+                isDark ? "text-stone-300 border-stone-700" : "text-stone-700 border-stone-300"
               )}
               style={isFailureLog
                 ? { borderLeftColor: '#ef4444' }
                 : isDrillLog
                 ? { borderLeftColor: '#7c3aed' }
-                : (log.type === 'thinking' ? { color: '#3C81F6', borderLeftColor: '#3C81F6' } : undefined)}
+                : (log.type === 'thinking' ? { color: '#d97706', borderLeftColor: '#d97706' } : undefined)}
             >
               {hasExpandable ? (
                 <button
@@ -105,7 +105,7 @@ export function AgentLog({ logs, status, theme = 'dark', hideHeader = false, emb
                   onClick={() => toggleExpand(log.id)}
                   className={clsx(
                     "w-full text-left flex items-start gap-2 rounded px-1 py-0.5 transition-colors",
-                    isDark ? "hover:bg-white/5" : "hover:bg-gray-100/60"
+                    isDark ? "hover:bg-white/5" : "hover:bg-stone-100/60"
                   )}
                 >
                   <span className="mt-0.5 shrink-0 opacity-80">
@@ -115,11 +115,11 @@ export function AgentLog({ logs, status, theme = 'dark', hideHeader = false, emb
                     {log.type === 'thinking' && <BrainCircuit className="w-3.5 h-3.5 animate-pulse" />}
                     {!isFailureLog && log.type === 'info' && <span className={clsx(
                       "w-3.5 h-3.5 block rounded-full border text-[9px] flex items-center justify-center",
-                      isDark ? "bg-blue-500/20 border-blue-500/50 text-blue-400" : "bg-blue-50 border-blue-200 text-blue-600"
+                      isDark ? "bg-amber-500/20 border-amber-500/50 text-amber-400" : "bg-amber-50 border-amber-200 text-amber-600"
                     )}>i</span>}
                   </span>
                   <span className="leading-relaxed opacity-90 flex-1">{displayMessage}</span>
-                  <span className={clsx("p-0.5 rounded transition-colors", isDark ? "text-slate-400" : "text-slate-500")}>
+                  <span className={clsx("p-0.5 rounded transition-colors", isDark ? "text-stone-400" : "text-stone-500")}>
                     {expandedLogs[log.id] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   </span>
                 </button>
@@ -132,7 +132,7 @@ export function AgentLog({ logs, status, theme = 'dark', hideHeader = false, emb
                     {log.type === 'thinking' && <BrainCircuit className="w-3.5 h-3.5 animate-pulse" />}
                     {!isFailureLog && log.type === 'info' && <span className={clsx(
                       "w-3.5 h-3.5 block rounded-full border text-[9px] flex items-center justify-center",
-                      isDark ? "bg-blue-500/20 border-blue-500/50 text-blue-400" : "bg-blue-50 border-blue-200 text-blue-600"
+                      isDark ? "bg-amber-500/20 border-amber-500/50 text-amber-400" : "bg-amber-50 border-amber-200 text-amber-600"
                     )}>i</span>}
                   </span>
                   <span className="leading-relaxed opacity-90 flex-1">{displayMessage}</span>
@@ -152,26 +152,26 @@ export function AgentLog({ logs, status, theme = 'dark', hideHeader = false, emb
                               {log.aiTrace && (
                                 <div className={clsx(
                                   "p-2 rounded border max-h-80 overflow-y-auto overflow-x-hidden scrollbar-custom",
-                                  isDark ? "bg-black/20 border-white/5" : "bg-gray-50 border-gray-200"
+                                  isDark ? "bg-stone-800/50 border-stone-600/30" : "bg-stone-50 border-stone-200"
                                 )}>
-                                  <div className="text-[10px] text-cyan-400 mb-1.5 uppercase tracking-wider font-bold">
+                                  <div className="text-[10px] text-orange-400 mb-1.5 uppercase tracking-wider font-bold">
                                     AI 请求 / 响应{log.aiTrace.label ? ` · ${log.aiTrace.label}` : ''}
                                   </div>
                                   <div className="space-y-2">
                                     <div>
-                                      <div className={clsx("text-[10px] mb-1", isDark ? "text-slate-500" : "text-slate-500")}>Request</div>
+                                      <div className={clsx("text-[10px] mb-1", isDark ? "text-stone-400" : "text-stone-500")}>Request</div>
                                       <pre className={clsx(
                                         "text-[10px] leading-relaxed whitespace-pre-wrap break-words rounded p-2 border",
-                                        isDark ? "text-slate-300 bg-black/20 border-white/5" : "text-slate-700 bg-white border-gray-200"
+                                        isDark ? "text-stone-300 bg-stone-800/50 border-stone-600/30" : "text-stone-700 bg-white border-stone-200"
                                       )}>
                                         {log.aiTrace.request}
                                       </pre>
                                     </div>
                                     <div>
-                                      <div className={clsx("text-[10px] mb-1", isDark ? "text-slate-500" : "text-slate-500")}>Response</div>
+                                      <div className={clsx("text-[10px] mb-1", isDark ? "text-stone-400" : "text-stone-500")}>Response</div>
                                       <pre className={clsx(
                                         "text-[10px] leading-relaxed whitespace-pre-wrap break-words rounded p-2 border",
-                                        isDark ? "text-slate-300 bg-black/20 border-white/5" : "text-slate-700 bg-white border-gray-200"
+                                        isDark ? "text-stone-300 bg-stone-800/50 border-stone-600/30" : "text-stone-700 bg-white border-stone-200"
                                       )}>
                                         {log.aiTrace.response}
                                       </pre>
@@ -183,14 +183,14 @@ export function AgentLog({ logs, status, theme = 'dark', hideHeader = false, emb
                               {log.details && (
                                 <div className={clsx(
                                   "p-2 rounded border max-h-60 overflow-y-auto overflow-x-hidden scrollbar-custom",
-                                  isDark ? "bg-black/20 border-white/5" : "bg-gray-50 border-gray-200"
+                                  isDark ? "bg-stone-800/50 border-stone-600/30" : "bg-stone-50 border-stone-200"
                                 )}>
-                                  <div className={clsx("text-[10px] mb-1.5 uppercase tracking-wider font-bold", isDark ? "text-slate-500" : "text-slate-500")}>文件列表 ({log.details.length})</div>
+                                  <div className={clsx("text-[10px] mb-1.5 uppercase tracking-wider font-bold", isDark ? "text-stone-400" : "text-stone-500")}>文件列表 ({log.details.length})</div>
                                   <div className="space-y-1">
                                       {log.details.map((file, idx) => (
                                           <div key={idx} className={clsx(
                                             "flex items-center gap-1.5 transition-colors",
-                                            isDark ? "text-slate-400 hover:text-slate-300" : "text-slate-500 hover:text-slate-700"
+                                            isDark ? "text-stone-400 hover:text-stone-300" : "text-stone-500 hover:text-stone-700"
                                           )}>
                                               <FileText size={10} className="opacity-50" />
                                               <span className="truncate">{file}</span>
@@ -212,7 +212,7 @@ export function AgentLog({ logs, status, theme = 'dark', hideHeader = false, emb
             <motion.div 
                 animate={{ opacity: [0, 1, 0] }} 
                 transition={{ repeat: Infinity, duration: 0.8 }}
-                className="w-2 h-4 bg-blue-500 ml-1 inline-block align-middle"
+                className="w-2 h-4 bg-amber-500 ml-1 inline-block align-middle"
             />
         )}
       </div>
@@ -226,7 +226,7 @@ export function AgentLog({ logs, status, theme = 'dark', hideHeader = false, emb
   return (
     <div className={clsx(
       "w-full h-full backdrop-blur-md rounded-xl shadow-2xl border overflow-hidden flex flex-col min-h-[240px] relative",
-      isDark ? "bg-slate-950/80 border-slate-800" : "bg-white/90 border-gray-200 shadow-slate-200/70"
+      isDark ? "bg-stone-900/80 border-stone-800" : "bg-white/90 border-stone-200 shadow-stone-200/70"
     )}>
       {content}
     </div>
