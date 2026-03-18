@@ -43,6 +43,11 @@ const HISTORY_DIR = envHistoryDir
   ? (path.isAbsolute(envHistoryDir) ? envHistoryDir : path.resolve(process.cwd(), envHistoryDir))
   : path.join(os.homedir(), ".code-panorama-history");
 
+export function isHistoryUnavailableError(error: unknown) {
+  const code = typeof error === "object" && error !== null ? (error as { code?: string }).code : "";
+  return code === "ENOENT" || code === "EACCES" || code === "EPERM" || code === "EROFS";
+}
+
 function safeFileName(input: string) {
   return String(input || "project")
     .toLowerCase()

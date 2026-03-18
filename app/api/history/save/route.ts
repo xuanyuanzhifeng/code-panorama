@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { saveHistoryRecord } from "@/lib/historyStore";
+import { isHistoryUnavailableError, saveHistoryRecord } from "@/lib/historyStore";
 
 export const runtime = "nodejs";
 
@@ -34,6 +34,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, ...saved });
   } catch (error: any) {
+    if (isHistoryUnavailableError(error)) {
+      return NextResponse.json({ success: true, skipped: true, historyUnavailable: true });
+    }
     return NextResponse.json({ success: false, error: error?.message || "Failed to save history" }, { status: 500 });
   }
 }

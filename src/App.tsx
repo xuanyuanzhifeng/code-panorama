@@ -310,6 +310,13 @@ type HistoryListItem = {
   mdFile: string;
 };
 
+type HistoryStoredRecord = HistoryListItem & {
+  markdown: string;
+  graphData: GraphData;
+  logs: LogEntry[];
+  aiUsageStats: AiUsageStats;
+};
+
 type AppSettings = {
   theme: 'light' | 'dark';
   githubToken: string;
@@ -326,6 +333,7 @@ const PANEL_MIN_WIDTH: Record<PanelKey, number> = {
   panorama: 18,
 };
 const HISTORY_PAGE_SIZE = 10;
+const HISTORY_STORAGE_KEY = 'code-panorama-history-items';
 
 function buildFileTree(paths: string[]): TreeNode[] {
   type InternalNode = TreeNode & { childMap: Map<string, InternalNode> };
@@ -393,6 +401,28 @@ function detectMonacoLanguageFromPath(path: string) {
     sh: 'shell', bash: 'shell', zsh: 'shell', sql: 'sql', vue: 'html',
   };
   return map[ext] || 'plaintext';
+}
+
+function readLocalHistoryRecords(): HistoryStoredRecord[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalHistoryRecords(items: HistoryStoredRecord[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(items));
+  } catch {
+    // ignore storage errors
+  }
 }
 
 function App() {
@@ -575,12 +605,10 @@ function App() {
     setHistoryLoading(true);
     setHistoryError('');
     try {
-      const res = await fetch('/api/history/list');
-      const data = await res.json();
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.error || '加载历史记录失败');
-      }
-      setHistoryItems(Array.isArray(data?.items) ? data.items : []);
+      const items = readLocalHistoryRecords()
+        .map(({ markdown, graphData, logs, aiUsageStats, ...rest }) => rest)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setHistoryItems(items);
     } catch (error: any) {
       setHistoryError(error?.message || '加载历史记录失败');
     } finally {
@@ -913,12 +941,10 @@ function App() {
     if (!id || loadingHistoryId) return;
     setLoadingHistoryId(id);
     try {
-      const res = await fetch(`/api/history/item?id=${encodeURIComponent(id)}`);
-      const data = await res.json();
-      if (!res.ok || !data?.success || !data?.item?.graphData) {
-        throw new Error(data?.error || '加载历史工程失败');
+      const item = readLocalHistoryRecords().find((record) => record.id === id);
+      if (!item?.graphData) {
+        throw new Error('加载历史工程失败');
       }
-      const item = data.item;
       clearFileCache();
       setImportedLogs(Array.isArray(item.logs) ? item.logs : []);
       setImportedAiUsage({
@@ -944,11 +970,8 @@ function App() {
     if (!ok) return;
     setDeletingHistoryId(id);
     try {
-      const res = await fetch(`/api/history/item?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.error || '删除历史工程失败');
-      }
+      const nextItems = readLocalHistoryRecords().filter((record) => record.id !== id);
+      writeLocalHistoryRecords(nextItems);
       await refreshHistory();
     } catch (error: any) {
       alert(error?.message || '删除历史工程失败');
@@ -982,25 +1005,22 @@ function App() {
 
     const run = async () => {
       try {
-        const res = await fetch('/api/history/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name,
-            sourceType,
-            source,
-            language: graphData.project?.language || 'Unknown',
-            techStack: Array.isArray(graphData.project?.techStack) ? graphData.project.techStack : [],
-            markdown: fingerprint,
-            graphData,
-            logs: panelLogs,
-            aiUsageStats: mergedAiUsageStats,
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data?.success) {
-          throw new Error(data?.error || '自动保存失败');
-        }
+        const nextRecord: HistoryStoredRecord = {
+          id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+          name,
+          sourceType,
+          source,
+          createdAt: new Date().toISOString(),
+          language: graphData.project?.language || 'Unknown',
+          techStack: Array.isArray(graphData.project?.techStack) ? graphData.project.techStack.slice(0, 20) : [],
+          mdFile: '',
+          markdown: fingerprint,
+          graphData,
+          logs: panelLogs,
+          aiUsageStats: mergedAiUsageStats,
+        };
+        const existing = readLocalHistoryRecords().filter((record) => record.source !== source);
+        writeLocalHistoryRecords([nextRecord, ...existing].slice(0, 50));
         autoSaveStateRef.current.lastSavedFingerprint = fingerprint;
         autoSaveStateRef.current.armed = false;
         await refreshHistory();
@@ -1609,7 +1629,7 @@ function App() {
                 </div>
               ) : historyItems.length === 0 ? (
                 <div className={clsx('rounded-lg border px-3 py-6 text-center text-xs', theme === 'dark' ? 'border-stone-800 text-stone-500' : 'border-stone-200 text-stone-500')}>
-                  暂无历史工程。完成一次分析后会自动保存到项目外的历史目录。
+                  暂无历史工程。完成一次分析后会自动保存到当前浏览器本地。
                 </div>
               ) : (
                 <div className="space-y-4">
