@@ -718,12 +718,10 @@ function App() {
         if (cancelled) return;
         const envBaseUrl = String(payload?.llmBaseUrl || '').trim();
         const envModel = String(payload?.llmModel || '').trim();
-        const envApiKey = String(payload?.llmApiKey || '').trim();
         setSettings((prev) => ({
           ...prev,
           llmBaseUrl: prev.llmBaseUrl.trim() || envBaseUrl,
           llmModel: prev.llmModel.trim() || envModel,
-          llmApiKey: prev.llmApiKey.trim() || envApiKey,
         }));
       } catch {
         // ignore fetch errors

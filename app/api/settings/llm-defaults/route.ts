@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { llmApiKey, llmBaseUrl, llmModel } from "@/lib/openaiCompat";
+import { llmBaseUrl, llmModel } from "@/lib/openaiCompat";
 
 export const runtime = "nodejs";
 
@@ -8,7 +8,6 @@ export async function GET() {
     {
       llmBaseUrl: llmBaseUrl || "",
       llmModel: llmModel || "",
-      llmApiKey: llmApiKey || "",
     },
     {
       headers: {

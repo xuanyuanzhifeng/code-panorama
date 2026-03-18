@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-const logFilePath = process.env.AI_CALL_LOG_FILE || path.join(process.cwd(), "logs", "ai-calls.log");
+const logFilePath = process.env.AI_CALL_LOG_FILE || path.join("/tmp", "code-panorama", "ai-calls.log");
 
 function ensureLogDir() {
   mkdirSync(path.dirname(logFilePath), { recursive: true });
@@ -24,8 +24,12 @@ function writeLine(level: "INFO" | "ERROR", event: string, payload: Record<strin
   //   console.log("[AI_CALL]", line);
   // }
 
-  ensureLogDir();
-  appendFileSync(logFilePath, `${line}\n`, "utf8");
+  try {
+    ensureLogDir();
+    appendFileSync(logFilePath, `${line}\n`, "utf8");
+  } catch {
+    // Ignore file logging failures in read-only/serverless environments.
+  }
 }
 
 export function createAiCallId() {
