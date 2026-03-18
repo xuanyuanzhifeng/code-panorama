@@ -738,6 +738,21 @@ function App() {
   }, [view, isPanelVisible.source]);
 
   const handleAnalyze = (url: string, sourceType: 'github' | 'local' = 'github') => {
+    const llmBaseUrl = settings.llmBaseUrl.trim();
+    const llmModel = settings.llmModel.trim();
+    const llmApiKey = settings.llmApiKey.trim();
+    const githubToken = settings.githubToken.trim();
+
+    if (!llmBaseUrl || !llmModel || !llmApiKey) {
+      window.alert('请先在设置中完善 AI 配置后再开始分析。');
+      return;
+    }
+
+    if (sourceType === 'github' && !githubToken) {
+      window.alert('请先在设置中填写 GitHub Token 后再开始分析。');
+      return;
+    }
+
     clearFileCache();
     setImportedLogs(null);
     setImportedAiUsage(null);
@@ -750,7 +765,7 @@ function App() {
     setSourceError('');
     setLastExportFingerprint(null);
     autoSaveStateRef.current.armed = true;
-    analyzeRepo(url, sourceType === 'github' ? (settings.githubToken.trim() || undefined) : undefined, sourceType);
+    analyzeRepo(url, sourceType === 'github' ? githubToken : undefined, sourceType);
   };
 
   const getCurrentExportFingerprint = useCallback(() => {
@@ -1169,6 +1184,34 @@ function App() {
 
         {/* Body */}
         <div className={clsx('flex-1 overflow-y-auto p-6 space-y-6 text-sm scrollbar-custom', theme === 'dark' ? 'text-stone-200' : 'text-stone-700')}>
+          <section>
+            <div
+              className={clsx(
+                'rounded-xl border px-4 py-3 text-[12px] leading-5',
+                theme === 'dark'
+                  ? 'border-amber-500/30 bg-amber-500/10 text-stone-300'
+                  : 'border-amber-200 bg-amber-50 text-stone-600'
+              )}
+            >
+              <div className={clsx('font-semibold', theme === 'dark' ? 'text-amber-300' : 'text-amber-700')}>
+                设置保存说明
+              </div>
+              <div className="mt-1">
+                本页面中的全部设置仅保存在当前浏览器本地，包括外观、GitHub 配置、AI 模型配置和分析参数；这些数据不会保存到服务端，也不会同步给其他设备或用户。
+              </div>
+              <a
+                href="https://github.com/xuanyuanzhifeng/code-panorama"
+                target="_blank"
+                rel="noreferrer"
+                className={clsx(
+                  'mt-1.5 inline-flex items-center gap-1 underline underline-offset-2 transition-colors',
+                  theme === 'dark' ? 'text-amber-300 hover:text-amber-200' : 'text-amber-700 hover:text-amber-800'
+                )}
+              >
+                项目已开源: github.com/xuanyuanzhifeng/code-panorama
+              </a>
+            </div>
+          </section>
 
           {/* Theme */}
           <section>
