@@ -60,10 +60,16 @@ npm install
 在项目根目录创建 `.env`，至少配置：
 
 ```bash
+LLM_API_TYPE=chat
 LLM_API_KEY=your_api_key
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gemini3-flash-preview
 ```
+
+其中 `LLM_API_TYPE` 支持：
+
+- `chat`：使用 OpenAI 兼容的 `/v1/chat/completions`
+- `responses`：使用 `/responses`
 
 如需访问私有 GitHub 仓库，也可以在界面设置中填写 GitHub Token。
 

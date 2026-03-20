@@ -320,6 +320,7 @@ type HistoryStoredRecord = HistoryListItem & {
 type AppSettings = {
   theme: 'light' | 'dark';
   githubToken: string;
+  llmApiType: 'chat' | 'responses';
   llmBaseUrl: string;
   llmModel: string;
   llmApiKey: string;
@@ -433,6 +434,7 @@ function App() {
       return {
         theme: 'dark',
         githubToken: '',
+        llmApiType: 'chat',
         llmBaseUrl: '',
         llmModel: '',
         llmApiKey: '',
@@ -447,6 +449,7 @@ function App() {
         return {
           theme: fallbackTheme === 'light' || fallbackTheme === 'dark' ? fallbackTheme : 'dark',
           githubToken: '',
+          llmApiType: 'chat',
           llmBaseUrl: '',
           llmModel: '',
           llmApiKey: '',
@@ -458,6 +461,7 @@ function App() {
       return {
         theme: parsed?.theme === 'light' ? 'light' : 'dark',
         githubToken: String(parsed?.githubToken || ''),
+        llmApiType: parsed?.llmApiType === 'responses' ? 'responses' : 'chat',
         llmBaseUrl: String(parsed?.llmBaseUrl || ''),
         llmModel: String(parsed?.llmModel || ''),
         llmApiKey: String(parsed?.llmApiKey || ''),
@@ -468,6 +472,7 @@ function App() {
       return {
         theme: 'dark',
         githubToken: '',
+        llmApiType: 'chat',
         llmBaseUrl: '',
         llmModel: '',
         llmApiKey: '',
@@ -522,6 +527,7 @@ function App() {
     llmBaseUrl: settings.llmBaseUrl,
     llmModel: settings.llmModel,
     llmApiKey: settings.llmApiKey,
+    llmApiType: settings.llmApiType,
     maxDrillDepth: settings.maxDrillDepth,
     maxChildCallsPerFunction: settings.maxChildCallsPerFunction,
   });
@@ -716,10 +722,12 @@ function App() {
         if (!response.ok) return;
         const payload = await response.json();
         if (cancelled) return;
+        const envApiType = payload?.llmApiType === 'responses' ? 'responses' : 'chat';
         const envBaseUrl = String(payload?.llmBaseUrl || '').trim();
         const envModel = String(payload?.llmModel || '').trim();
         setSettings((prev) => ({
           ...prev,
+          llmApiType: (prev.llmBaseUrl.trim() || prev.llmModel.trim() || prev.llmApiKey.trim()) ? prev.llmApiType : envApiType,
           llmBaseUrl: prev.llmBaseUrl.trim() || envBaseUrl,
           llmModel: prev.llmModel.trim() || envModel,
         }));
@@ -1295,6 +1303,22 @@ function App() {
               'rounded-xl border p-4 space-y-4',
               theme === 'dark' ? 'border-stone-700 bg-stone-900/50' : 'border-stone-200 bg-stone-50/50'
             )}>
+              <label className="block">
+                <div className={clsx('text-xs font-medium mb-1.5', theme === 'dark' ? 'text-stone-300' : 'text-stone-600')}>API 类型</div>
+                <select
+                  value={settings.llmApiType}
+                  onChange={(e) => setSettings((prev) => ({ ...prev, llmApiType: e.target.value === 'responses' ? 'responses' : 'chat' }))}
+                  className={clsx(
+                    'w-full rounded-lg border px-3 py-2 text-xs outline-none transition-colors focus:ring-1',
+                    theme === 'dark'
+                      ? 'border-stone-600 bg-stone-800 text-stone-200 focus:border-amber-500/50 focus:ring-amber-500/30'
+                      : 'border-stone-300 bg-white text-stone-700 focus:border-amber-400 focus:ring-amber-200'
+                  )}
+                >
+                  <option value="chat">Chat Completions</option>
+                  <option value="responses">Responses</option>
+                </select>
+              </label>
               <label className="block">
                 <div className={clsx('text-xs font-medium mb-1.5', theme === 'dark' ? 'text-stone-300' : 'text-stone-600')}>Base URL</div>
                 <input

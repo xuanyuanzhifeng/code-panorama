@@ -1,12 +1,8 @@
 import OpenAI from "openai";
+import { normalizeApiType, normalizeBaseUrl } from "@/lib/llmProtocol";
 
-export function normalizeBaseUrl(url: string): string {
-  if (!url) return url;
-  const normalized = url.replace(/\/+$/, "");
-  return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
-}
-
-export const llmBaseUrl = normalizeBaseUrl(process.env.LLM_BASE_URL || "https://api.openai.com/v1");
+export const llmApiType = normalizeApiType(process.env.LLM_API_TYPE || "chat");
+export const llmBaseUrl = normalizeBaseUrl(process.env.LLM_BASE_URL || "https://api.openai.com/v1", llmApiType);
 export const llmApiKey = process.env.LLM_API_KEY || "";
 export const llmModel = process.env.LLM_MODEL || "gemini-3-flash-preview";
 
@@ -18,7 +14,7 @@ export function getLlmClient(options?: { baseUrl?: string; apiKey?: string }) {
     throw new Error("LLM_API_KEY is not set.");
   }
 
-  const resolvedBaseUrl = normalizeBaseUrl(options?.baseUrl || llmBaseUrl);
+  const resolvedBaseUrl = String(options?.baseUrl || llmBaseUrl || "").trim();
   const cacheKey = `${resolvedBaseUrl || "__default__"}::${resolvedApiKey}`;
   const hit = clientMap.get(cacheKey);
   if (hit) return hit;

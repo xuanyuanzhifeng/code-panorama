@@ -6,6 +6,7 @@ type DrillFlag = -1 | 0 | 1;
 type SourceType = 'github' | 'local';
 
 type AgentSettings = {
+  llmApiType?: 'chat' | 'responses';
   llmBaseUrl?: string;
   llmModel?: string;
   llmApiKey?: string;
@@ -520,6 +521,7 @@ export function useGithubAgent(settings?: AgentSettings) {
   const nodeSeqRef = useRef(0);
   const stopRequestedRef = useRef(false);
   const activeRunIdRef = useRef(0);
+  const llmApiType = settings?.llmApiType === 'responses' ? 'responses' : 'chat';
   const llmBaseUrl = String(settings?.llmBaseUrl || '').trim();
   const llmModel = String(settings?.llmModel || '').trim();
   const llmApiKey = String(settings?.llmApiKey || '').trim();
@@ -621,6 +623,7 @@ export function useGithubAgent(settings?: AgentSettings) {
     try {
       const res = await axios.post('/api/llm/json', {
         prompt,
+        apiType: llmApiType,
         ...(llmModel ? { model: llmModel } : {}),
         ...(llmBaseUrl ? { baseUrl: llmBaseUrl } : {}),
         ...(llmApiKey ? { apiKey: llmApiKey } : {}),
